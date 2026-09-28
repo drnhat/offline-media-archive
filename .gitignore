@@ -1,0 +1,76 @@
+# Cấu hình có thể chứa đường dẫn hoặc thông tin riêng
+config.yml
+config*.yaml
+config*.yml
+.env
+.env.*
+!.env.example
+
+# Archive HTML sinh ra có thể chứa tên file và cấu trúc dữ liệu cá nhân
+/index.html
+/index*.html
+
+# Thư mục media (mọi thư mục nguồn có tên phổ biến)
+/images/
+/Images/
+**/images/
+**/Images/
+/media/
+/Media/
+**/media/
+**/Media/
+
+# Tệp media phổ biến, phòng trường hợp đặt ngoài thư mục media
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.avif
+*.bmp
+*.svg
+*.apng
+*.jxl
+*.heic
+*.heif
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.ogv
+*.tif
+*.tiff
+*.3gp
+*.mkv
+*.avi
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Ghi chú đi kèm dữ liệu archive
+*.md
+!README.md
+
+# macOS metadata và resource forks
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+__MACOSX/
+
+# Python cache
+__pycache__/
+*.py[cod]

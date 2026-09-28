@@ -1,0 +1,39 @@
+# Mẫu cấu hình cho Offline Media Archive v2.10
+# Sao chép file này thành config.yml rồi chỉnh các giá trị bên dưới.
+
+# Tên hiển thị trên trang. Để trống sẽ tự dùng: tên thư mục chứa build_archive.py + " Archive".
+title: "Offline Media Archive"
+
+# Danh sách thư mục chứa ảnh/video, tính đường dẫn tương đối từ vị trí config.yml.
+# Một thư mục: giữ lại dòng images bên dưới.
+# Nhiều thư mục: thêm mỗi đường dẫn thành một dòng - "...".
+# Khi dùng nhiều thư mục, tên thư mục nguồn hiện dưới mỗi bài đăng.
+images_dirs:
+  - "images"
+  # - "../archive-2/images"
+  # - "../archive-3/images"
+
+# Có thể dùng images_dir: "images" thay cho images_dirs nếu chỉ có một thư mục.
+# Nếu không khai báo thư mục, chương trình tự tìm Images/ hoặc images/ cạnh build_archive.py
+# và trong thư mục làm việc hiện tại.
+
+# Theme lúc tạo trang: auto hoặc một theme có sẵn.
+# auto dùng theme_light/theme_dark dựa trên giao diện sáng/tối của thiết bị.
+theme: "auto"
+theme_light: "rose-pine-dawn"
+theme_dark: "noir-velvet"
+
+# Thứ tự bài: name (mặc định), created (cũ đến mới), created_desc (mới đến cũ).
+sort_by: "name"
+
+# Header ghim ở trên khi cuộn.
+sticky_header: true
+
+# Thông tin hiển thị dưới media. Mặc định đều tắt để giao diện gọn hơn.
+show_filename: false
+show_created_time: false
+
+# Các theme có sẵn:
+# Catppuccin: mocha, frappe, macchiato, latte
+# Tối: nord, tokyo-night, gruvbox, rose-pine, noir-velvet, oxblood
+# Sáng: nord-light, tokyo-night-light, gruvbox-light, rose-pine-dawn
