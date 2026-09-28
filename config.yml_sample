@@ -1,12 +1,14 @@
-# Mẫu cấu hình cho Offline Media Archive v2.10
+# Mẫu cấu hình cho Offline Media Archive v2.13
 # Sao chép file này thành config.yml rồi chỉnh các giá trị bên dưới.
 
 # Tên hiển thị trên trang. Để trống sẽ tự dùng: tên thư mục chứa build_archive.py + " Archive".
 title: "Offline Media Archive"
 
 # Danh sách thư mục chứa ảnh/video, tính đường dẫn tương đối từ vị trí config.yml.
+# Mỗi thư mục được quét đệ quy, bao gồm mọi thư mục con.
 # Một thư mục: giữ lại dòng images bên dưới.
 # Nhiều thư mục: thêm mỗi đường dẫn thành một dòng - "...".
+# Tự tìm mọi thư mục con cấp một có media: dùng duy nhất images_dirs: [all].
 # Khi dùng nhiều thư mục, tên thư mục nguồn hiện dưới mỗi bài đăng.
 images_dirs:
   - "images"
@@ -32,6 +34,7 @@ sticky_header: true
 # Thông tin hiển thị dưới media. Mặc định đều tắt để giao diện gọn hơn.
 show_filename: false
 show_created_time: false
+show_file_size: false
 
 # Các theme có sẵn:
 # Catppuccin: mocha, frappe, macchiato, latte

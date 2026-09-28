@@ -9,6 +9,7 @@ config*.yml
 # Archive HTML sinh ra có thể chứa tên file và cấu trúc dữ liệu cá nhân
 /index.html
 /index*.html
+/archive/
 
 # Thư mục media (mọi thư mục nguồn có tên phổ biến)
 /images/
