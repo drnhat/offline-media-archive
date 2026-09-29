@@ -1,4 +1,4 @@
-# Mẫu cấu hình cho Offline Media Archive v2.13
+# Mẫu cấu hình cho Offline Media Archive v2.14
 # Sao chép file này thành config.yml rồi chỉnh các giá trị bên dưới.
 
 # Tên hiển thị trên trang. Để trống sẽ tự dùng: tên thư mục chứa build_archive.py + " Archive".
@@ -35,6 +35,12 @@ sticky_header: true
 show_filename: false
 show_created_time: false
 show_file_size: false
+
+# Bật để tải metadata và dùng fragment #t=0.1 tạo thumbnail video; mặc định tắt để giảm tải.
+show_video_thumbnails: false
+
+# Số cấp thư mục con dùng trong bộ lọc: 0 chỉ lọc thư mục nguồn; 1, 2, 3... lọc sâu hơn.
+folder_filter_depth: 1
 
 # Các theme có sẵn:
 # Catppuccin: mocha, frappe, macchiato, latte

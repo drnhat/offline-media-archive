@@ -1,121 +1,632 @@
-# Offline Media Archive v2.13
+ Gemini
+Cuộc trò chuyện mới
+Tìm kiếm trong các cuộc trò chuyện
+Thư viện
+Sổ ghi chú mới
+Lịch sử và Hồi ức về Hệ điều hành Unix
+Viêm gan siêu vi và thai kỳ
+Tất cả sổ ghi chú
+Tạo README cho build_archive.py
+Script Python Ghi Metadata Âm Nhạc
+Hướng dẫn cài đặt và giải nén
+Trang web tạo favicon miễn phí
+Xe Honda Vision có phanh ABS không?
+Tải File Qua Proxy SOCKS5 Bằng Aria2c
+Python script for Tumblr-style archive
+Cách tính phí sử dụng ChatGPT
+Đặt tên thư mục code tạm
+Cách khắc phục lỗi push Git bị từ chối
+Khả Năng Chịu Tải Của Dây Điện 0.75mm²
+Tư vấn webserver siêu nhẹ phục vụ file tĩnh
+Khắc Phục Màn Hình Rung Lắc
+Kiểm Tra Hồ Sơ Bệnh Án
+Cách tăng sáng video trên MPV
+Lệnh FFmpeg Trích Xuất Keyframe
+Giải mã file dữ liệu Tumblr
+Hướng Dẫn Tải Dữ Liệu Tumblr
+Tìm archive Tumblr Đèn Dạ Khói Đường
+Tạo Web Hiển Thị Ảnh Tumblr
+Script chuẩn hóa tag file FLAC
+Dịch Phụ Đề Tiếng Thái
+Sửa lỗi import trong Python
+Sửa lỗi mã Python dịch SRT
+Kiểm Tra Hạn Mức Sử Dụng
+Trò chuyện với Gemini
 
-Công cụ tạo archive ảnh, GIF và video ngoại tuyến theo phong cách Tumblr. Tệp HTML, CSS và JavaScript được đóng gói trong một trang `index.html`; media vẫn nằm trong các thư mục nguồn để giữ HTML gọn nhẹ.
+Viết readme thật chuyên nghiệp cho code này nha
 
-## Bắt đầu nhanh
+Dưới đây là file README.md được thiết kế chuẩn mực, chuyên nghiệp cho dự án của bạn (phù hợp đăng trên GitHub/GitLab).
+📸 Tumblr-Style Offline Image & Video Archive Builder (build_archive.py)
 
-1. Đặt `build_archive.py` cạnh thư mục media, ví dụ `images/`.
-2. Sao chép `config.yml_sample` thành `config.yml`.
-3. Sửa tên archive, thư mục media và theme trong `config.yml` nếu cần.
-4. Chạy:
+Một công cụ Python gọn nhẹ, mạnh mẽ giúp đóng gói toàn bộ bộ sưu tập ảnh và video offline của bạn thành một file HTML duy nhất (index.html) với giao diện phong cách Tumblr hiện đại, mượt mà và tối ưu hóa trải nghiệm người dùng trên cả PC và thiết bị di động.
+✨ Tính năng nổi bật
 
-   ```bash
-   python3 build_archive.py
-   ```
+    🚀 Single-File Output & Full Offline: Đóng gói giao diện HTML, CSS, JavaScript thành 1 file duy nhất. Dễ dàng lưu trữ, chia sẻ hoặc mở trực tiếp trên trình duyệt mà không cần Server/Node.js.
 
-5. Mở `index.html` bằng trình duyệt. Không cần server để duyệt archive cục bộ.
+    🎨 14+ Theme Catppuccin & Palette màu sắc đẹp mắt: Hỗ trợ theme sáng/tối tự động (auto) hoặc lựa chọn thủ công: Mocha, Frappe, Macchiato, Latte, Nord, Tokyo Night, Gruvbox, Rosé Pine, Oxblood, Noir Velvet...
 
-Nếu không có `config.yml`, chương trình tự tìm thư mục `Images/` hoặc `images/` cạnh `build_archive.py` và trong thư mục làm việc hiện tại. Nếu vẫn không tìm thấy, chương trình sẽ báo lỗi đường dẫn.
+    📁 Tự động gom nhóm bài viết (Tumblr-style Grouping):
 
-## Cấu hình
+        Nhận diện thông minh chuỗi ảnh/media cùng 1 post qua định dạng tên file của Tumblr (o1, o2), số hiệu (128635952498_0.jpg) hoặc tên series.
 
-`config.yml_sample` có chú thích tiếng Việt và là cấu hình tham khảo. Parser của script hỗ trợ các giá trị đơn giản, danh sách `images_dirs` dạng nhiều dòng, chuỗi có dấu nháy và comment bắt đầu bằng `#`. Không dùng cấu trúc YAML lồng nhau hoặc block scalar.
+        Hỗ trợ gom nhóm thư mục con linh hoạt với tính năng Lọc thư mục theo nhánh.
 
-| Khóa | Mặc định | Ý nghĩa |
-| --- | --- | --- |
-| `title` | Tên thư mục chứa `build_archive.py` + ` Archive` | Tên archive trên trang. Để trống để dùng tên tự động. |
-| `images_dirs` | Tự tìm `Images/` hoặc `images/` | Danh sách thư mục media. Đường dẫn tương đối tính từ thư mục chứa `config.yml`. |
-| `images_dir` | Không đặt | Bí danh tiện dùng khi chỉ có một thư mục; `images_dirs` được ưu tiên nếu có danh sách. |
-| `theme` | `auto` | Theme lúc tạo: `auto` hoặc một theme cụ thể. |
-| `theme_light` | `rose-pine-dawn` | Theme sáng khi `theme: auto`. |
-| `theme_dark` | `mocha` | Theme tối khi `theme: auto`. |
-| `sort_by` | `name` | `name`, `created` (cũ đến mới), hoặc `created_desc` (mới đến cũ). |
-| `sticky_header` | `true` | Bật/tắt header ghim khi cuộn. |
-| `show_filename` | `false` | Hiện tên file dưới media. |
-| `show_created_time` | `false` | Hiện ngày giờ tạo file dưới media. |
-| `show_file_size` | `false` | Hiện dung lượng file dưới media. |
+    📝 Hỗ trợ Ghi chú / Markdown Sidecar: Tự động đọc nội dung file .md cùng tên với ảnh/bài viết để hiển thị chú thích, bài viết kèm theo.
 
-`show_media_info` vẫn được hỗ trợ để tương thích cấu hình cũ: nếu đặt khóa này mà không ghi riêng `show_filename` hoặc `show_created_time`, giá trị áp dụng cho cả hai. Dung lượng được bật riêng bằng `show_file_size`.
+    🎥 Hỗ trợ Đa phương tiện:
 
-### Nhiều thư mục media
+        Hình ảnh: JPG, PNG, WEBP, AVIF, GIF, BMP, SVG, JXL, HEIC/HEIF, APNG.
 
-Khi có nhiều nguồn, menu **More → Lọc thư mục** cho phép bật/tắt từng nguồn hoặc chọn tất cả. Tiêu đề mỗi bài hiển thị theo số thứ tự dạng `#1`, `#2`.
+        Video: MP4, WEBM, MOV, M4V, OGV.
 
-Có thể đặt `images_dirs: [all]` để tự phát hiện mọi thư mục con cấp một cạnh `config.yml` (hoặc cạnh script nếu không có cấu hình) có chứa media. Mỗi thư mục nguồn được quét tiếp qua toàn bộ thư mục con. Dùng `all` như mục duy nhất trong `images_dirs`.
+    ⚡ Hiệu năng cao & Lazy Loading: Tải ảnh theo dạng cuộn trang (Infinite Scroll / Batch rendering) nhẹ nhàng, mượt mà ngay cả với hàng chục ngàn ảnh.
 
-```yaml
-images_dirs:
-  - "images"
-  - "../other-archive/images"
-  - "../third-archive/images"
+    🔍 Tìm kiếm & Bộ lọc nâng cao:
+
+        Tìm kiếm tức thì theo số bài, tên file hoặc nội dung ghi chú.
+
+        Lọc theo loại media (Ảnh, GIF, Video) hoặc bài viết đã thả tim (Liked).
+
+        Chế độ hiển thị Lưới gọn (Grid View) hoặc Danh sách (Feed View).
+
+    ⌨️ Phím tắt điều hướng nhanh & Lightbox: Trải nghiệm xem ảnh phóng to, chuyển bài bằng bàn phím (J/K, Space, G, L, V, M...) hoặc vuốt cảm ứng trên điện thoại.
+
+    💾 Backup / Restore dữ liệu Thích (Likes): Cho phép xuất/nhập danh sách bài viết đã thả tim dưới dạng file JSON.
+
+🛠️ Yêu cầu hệ thống
+
+    Python: Python 3.8+
+
+    Thư viện bên thứ ba: Không có! Chỉ sử dụng Thư viện chuẩn (Standard Library) của Python.
+
+🚀 Hướng dẫn nhanh (Quick Start)
+1. Cấu trúc thư mục chuẩn
+
+Đặt file build_archive.py cùng cấp với thư mục chứa ảnh/video của bạn (ví dụ ./images):
+Plaintext
+
+my-image-archive/
+├── build_archive.py
+├── config.yml (không bắt buộc)
+└── images/
+    ├── 128635952498_0.jpg
+    ├── 128635952498_1.jpg
+    ├── 128635952498_1.md        <-- (Tùy chọn) Chú thích cho bài viết dạng Markdown
+    ├── photo_2026-09-29.jpg
+    └── subfolder/
+        └── video_clip.mp4
+
+2. Chạy lệnh tạo Archive
+
+Chạy lệnh sau trong terminal:
+Bash
+
+python3 build_archive.py
+
+Lệnh trên sẽ quét thư mục ảnh và tạo ra file index.html. Bạn chỉ cần click đúp vào index.html để mở bộ sưu tập trên trình duyệt!
+⚙️ Cấu hình (config.yml)
+
+Bạn có thể tạo file config.yml nằm cạnh script để tùy chỉnh mặc định:
+YAML
+
+# Tiêu đề bộ sưu tập
+title: "BST Ảnh Của Tôi"
+
+# Đường dẫn thư mục chứa media (hoặc danh sách các thư mục)
+images_dir: "images"
+# Hoặc khai báo nhiều thư mục:
+# images_dirs:
+#   - "album_2025"
+#   - "album_2026"
+# Hoặc quét tất cả thư mục con:
+# images_dirs: "all"
+
+# Giao diện mặc định (auto, mocha, nord, tokyo-night, rose-pine, ...)
+theme: "auto"
+theme_light: "rose-pine-dawn"
+theme_dark: "mocha"
+
+# Sắp xếp: name (theo tên), created (ngày cũ nhất trước), created_desc (mới nhất trước)
+sort_by: "created_desc"
+
+# Cài đặt giao diện
+sticky_header: "true"
+show_filename: "false"
+show_created_time: "false"
+show_file_size: "false"
+show_video_thumbnails: "false"
+
+💻 Tham số dòng lệnh (CLI Options)
+
+Bạn có thể ghi đè cài đặt từ config.yml bằng các tham số CLI:
+Bash
+
+python3 build_archive.py [options]
+
+Tham số	Mô tả
+--images <path>	Chỉ định đường dẫn thư mục media (Ghi đè config.yml).
+--output <path>	Chỉ định đường dẫn file HTML xuất ra (Mặc định: index.html).
+--title <text>	Đặt tiêu đề cho Archive.
+--theme <theme>	Đặt theme màu sắc (Ví dụ: mocha, nord, tokyo-night, latte...).
+--sort-by <type>	Kiểu sắp xếp: name, created, created_desc.
+
+Ví dụ:
+Bash
+
+# Tạo archive từ thư mục ./my_photos với theme Tokyo Night và sắp xếp mới nhất lên đầu
+python3 build_archive.py --images ./my_photos --title "Kỷ Niệm 2026" --theme tokyo-night --sort-by created_desc --output gallery.html
+
+⌨️ Phím tắt điều hướng (Keyboard Shortcuts)
+
+Khi đang mở trang HTML Archive, bạn có thể dùng các phím tắt sau:
+Duyệt bài (Feed View)
+
+    J / ↓ : Chuyển xuống bài tiếp theo.
+
+    K / ↑ : Quay lại bài trước.
+
+    Space / Shift + Space : Cuộn nhanh tới/lùi.
+
+    T : Nhảy lên đầu trang.
+
+Công cụ & Thao tác
+
+    G : Mở ô tìm kiếm bài viết / media.
+
+    L : Thả tim (Like) bài viết đang chọn.
+
+    F : Bật/tắt chế độ chỉ hiển thị bài đã thích.
+
+    V : Đổi giữa chế độ Lưới (Grid View) và Danh sách (Feed View).
+
+    M : Đổi nhanh Theme giao diện.
+
+    E / I : Export / Import dữ liệu thả tim (Backup/Restore).
+
+Lightbox (Xem phóng to)
+
+    J / → : Xem media tiếp theo.
+
+    K / ← : Xem media phía trước.
+
+    Esc : Đóng Lightbox.
+
+📄 Giấy phép (License)
+
+Mã nguồn được phát hành dưới giấy phép MIT License. Bạn có thể tự do sử dụng, chỉnh sửa và chia sẻ.
+
+Mày tạo luôn Readme.md đi, để tao bỏ lên github
+2. Chạy lệnh tạo Archive
+
+Chạy lệnh sau trong terminal:
+Bash
+
+python3 build_archive.py
+
+Lệnh trên sẽ quét thư mục ảnh và tạo ra file index.html. Bạn chỉ cần click đúp vào index.html để mở bộ sưu tập trên trình duyệt!
+⚙️ Cấu hình (config.yml)
+
+Bạn có thể tạo file config.yml nằm cạnh script để tùy chỉnh mặc định:
+YAML
+
+# Tiêu đề bộ sưu tập
+title: "BST Ảnh Của Tôi"
+
+# Đường dẫn thư mục chứa media (hoặc danh sách các thư mục)
+images_dir: "images"
+# Hoặc khai báo nhiều thư mục:
+# images_dirs:
+#   - "album_2025"
+#   - "album_2026"
+# Hoặc quét tất cả thư mục con:
+# images_dirs: "all"
+
+# Giao diện mặc định (auto, mocha, nord, tokyo-night, rose-pine, ...)
+theme: "auto"
+theme_light: "rose-pine-dawn"
+theme_dark: "mocha"
+
+# Sắp xếp: name (theo tên), created (ngày cũ nhất trước), created_desc (mới nhất trước)
+sort_by: "created_desc"
+
+# Cài đặt giao diện
+sticky_header: "true"
+show_filename: "false"
+show_created_time: "false"
+show_file_size: "false"
+show_video_thumbnails: "false"
+
+💻 Tham số dòng lệnh (CLI Options)
+
+Bạn có thể ghi đè cài đặt từ config.yml bằng các tham số CLI:
+Bash
+
+python3 build_archive.py [options]
+
+Tham số	Mô tả
+--images <path>	Chỉ định đường dẫn thư mục media (Ghi đè config.yml).
+--output <path>	Chỉ định đường dẫn file HTML xuất ra (Mặc định: index.html).
+--title <text>	Đặt tiêu đề cho Archive.
+--theme <theme>	Đặt theme màu sắc (Ví dụ: mocha, nord, tokyo-night, latte...).
+--sort-by <type>	Kiểu sắp xếp: name, created, created_desc.
+
+Ví dụ:
+Bash
+
+# Tạo archive từ thư mục ./my_photos với theme Tokyo Night và sắp xếp mới nhất lên đầu
+python3 build_archive.py --images ./my_photos --title "Kỷ Niệm 2026" --theme tokyo-night --sort-by created_desc --output gallery.html
+
+⌨️ Phím tắt điều hướng (Keyboard Shortcuts)
+
+Khi đang mở trang HTML Archive, bạn có thể dùng các phím tắt sau:
+Duyệt bài (Feed View)
+
+    J / ↓ : Chuyển xuống bài tiếp theo.
+
+    K / ↑ : Quay lại bài trước.
+
+    Space / Shift + Space : Cuộn nhanh tới/lùi.
+
+    T : Nhảy lên đầu trang.
+
+Công cụ & Thao tác
+
+    G : Mở ô tìm kiếm bài viết / media.
+
+    L : Thả tim (Like) bài viết đang chọn.
+
+    F : Bật/tắt chế độ chỉ hiển thị bài đã thích.
+
+    V : Đổi giữa chế độ Lưới (Grid View) và Danh sách (Feed View).
+
+    M : Đổi nhanh Theme giao diện.
+
+    E / I : Export / Import dữ liệu thả tim (Backup/Restore).
+
+Lightbox (Xem phóng to)
+
+    J / → : Xem media tiếp theo.
+
+    K / ← : Xem media phía trước.
+
+    Esc : Đóng Lightbox.
+
+📄 Giấy phép (License)
+
+Mã nguồn được phát hành dưới giấy phép MIT License. Bạn có thể tự do sử dụng, chỉnh sửa và chia sẻ.
+"""
+
+with open("README.md", "w", encoding="utf-8") as f:
+f.write(readme_content)
+
+print("FILE_CREATED: README.md")
+
+
+```text?code_stdout&code_event_index=1
+FILE_CREATED: README.md
+
+Tệp README.md đã được tạo thành công!
+Biểu tượng MD
+README
+ MD 
+📸 Tumblr-Style Offline Image & Video Archive Builder (build_archive.py)
+
+Một công cụ Python gọn nhẹ, mạnh mẽ giúp đóng gói toàn bộ bộ sưu tập ảnh và video offline của bạn thành một file HTML duy nhất (index.html) với giao diện phong cách Tumblr hiện đại, mượt mà và tối ưu hóa trải nghiệm người dùng trên cả PC và thiết bị di động.
+✨ Tính năng nổi bật
+
+    🚀 Single-File Output & Full Offline: Đóng gói giao diện HTML, CSS, JavaScript thành 1 file duy nhất. Dễ dàng lưu trữ, chia sẻ hoặc mở trực tiếp trên trình duyệt mà không cần Server/Node.js.
+
+    🎨 14+ Theme Catppuccin & Palette màu sắc đẹp mắt: Hỗ trợ theme sáng/tối tự động (auto) hoặc lựa chọn thủ công: Mocha, Frappe, Macchiato, Latte, Nord, Tokyo Night, Gruvbox, Rosé Pine, Oxblood, Noir Velvet...
+
+    📁 Tự động gom nhóm bài viết (Tumblr-style Grouping):
+
+        Nhận diện thông minh chuỗi ảnh/media cùng 1 post qua định dạng tên file của Tumblr (o1, o2), số hiệu (128635952498_0.jpg) hoặc tên series.
+
+        Hỗ trợ gom nhóm thư mục con linh hoạt với tính năng Lọc thư mục theo nhánh.
+
+    📝 Hỗ trợ Ghi chú / Markdown Sidecar: Tự động đọc nội dung file .md cùng tên với ảnh/bài viết để hiển thị chú thích, bài viết kèm theo.
+
+    🎥 Hỗ trợ Đa phương tiện:
+
+        Hình ảnh: JPG, PNG, WEBP, AVIF, GIF, BMP, SVG, JXL, HEIC/HEIF, APNG.
+
+        Video: MP4, WEBM, MOV, M4V, OGV.
+
+    ⚡ Hiệu năng cao & Lazy Loading: Tải ảnh theo dạng cuộn trang (Infinite Scroll / Batch rendering) nhẹ nhàng, mượt mà ngay cả với hàng chục ngàn ảnh.
+
+    🔍 Tìm kiếm & Bộ lọc nâng cao:
+
+        Tìm kiếm tức thì theo số bài, tên file hoặc nội dung ghi chú.
+
+        Lọc theo loại media (Ảnh, GIF, Video) hoặc bài viết đã thả tim (Liked).
+
+        Chế độ hiển thị Lưới gọn (Grid View) hoặc Danh sách (Feed View).
+
+    ⌨️ Phím tắt điều hướng nhanh & Lightbox: Trải nghiệm xem ảnh phóng to, chuyển bài bằng bàn phím (J/K, Space, G, L, V, M...) hoặc vuốt cảm ứng trên điện thoại.
+
+    💾 Backup / Restore dữ liệu Thích (Likes): Cho phép xuất/nhập danh sách bài viết đã thả tim dưới dạng file JSON.
+
+🛠️ Yêu cầu hệ thống
+
+    Python: Python 3.8+
+
+    Thư viện bên thứ ba: Không có! Chỉ sử dụng Thư viện chuẩn (Standard Library) của Python.
+
+🚀 Hướng dẫn nhanh (Quick Start)
+1. Cấu trúc thư mục chuẩn
+
+Đặt file build_archive.py cùng cấp với thư mục chứa ảnh/video của bạn (ví dụ ./images):
+Plaintext
+
+my-image-archive/
+├── build_archive.py
+├── config.yml (không bắt buộc)
+└── images/
+    ├── 128635952498_0.jpg
+    ├── 128635952498_1.jpg
+    ├── 128635952498_1.md        <-- (Tùy chọn) Chú thích cho bài viết dạng Markdown
+    ├── photo_2026-09-29.jpg
+    └── subfolder/
+        └── video_clip.mp4
+
+2. Chạy lệnh tạo Archive
+
+Chạy lệnh sau trong terminal:
+Bash
+
+python3 build_archive.py
+
+Lệnh trên sẽ quét thư mục ảnh và tạo ra file index.html. Bạn chỉ cần click đúp vào index.html để mở bộ sưu tập trên trình duyệt!
+⚙️ Cấu hình (config.yml)
+
+Bạn có thể tạo file config.yml nằm cạnh script để tùy chỉnh mặc định:
+YAML
+
+# Tiêu đề bộ sưu tập
+title: "BST Ảnh Của Tôi"
+
+# Đường dẫn thư mục chứa media (hoặc danh sách các thư mục)
+images_dir: "images"
+# Hoặc khai báo nhiều thư mục:
+# images_dirs:
+#   - "album_2025"
+#   - "album_2026"
+# Hoặc quét tất cả thư mục con:
+# images_dirs: "all"
+
+# Giao diện mặc định (auto, mocha, nord, tokyo-night, rose-pine, ...)
+theme: "auto"
+theme_light: "rose-pine-dawn"
+theme_dark: "mocha"
+
+# Sắp xếp: name (theo tên), created (ngày cũ nhất trước), created_desc (mới nhất trước)
+sort_by: "created_desc"
+
+# Cài đặt giao diện
+sticky_header: "true"
+show_filename: "false"
+show_created_time: "false"
+show_file_size: "false"
+show_video_thumbnails: "false"
+
+💻 Tham số dòng lệnh (CLI Options)
+
+Bạn có thể ghi đè cài đặt từ config.yml bằng các tham số CLI:
+Bash
+
+python3 build_archive.py [options]
+
+Tham số	Mô tả
+--images <path>	Chỉ định đường dẫn thư mục media (Ghi đè config.yml).
+--output <path>	Chỉ định đường dẫn file HTML xuất ra (Mặc định: index.html).
+--title <text>	Đặt tiêu đề cho Archive.
+--theme <theme>	Đặt theme màu sắc (Ví dụ: mocha, nord, tokyo-night, latte...).
+--sort-by <type>	Kiểu sắp xếp: name, created, created_desc.
+
+Ví dụ:
+Bash
+
+# Tạo archive từ thư mục ./my_photos với theme Tokyo Night và sắp xếp mới nhất lên đầu
+python3 build_archive.py --images ./my_photos --title "Kỷ Niệm 2026" --theme tokyo-night --sort-by created_desc --output gallery.html
+
+⌨️ Phím tắt điều hướng (Keyboard Shortcuts)
+
+Khi đang mở trang HTML Archive, bạn có thể dùng các phím tắt sau:
+Duyệt bài (Feed View)
+
+    J / ↓ : Chuyển xuống bài tiếp theo.
+
+    K / ↑ : Quay lại bài trước.
+
+    Space / Shift + Space : Cuộn nhanh tới/lùi.
+
+    T : Nhảy lên đầu trang.
+
+Công cụ & Thao tác
+
+    G : Mở ô tìm kiếm bài viết / media.
+
+    L : Thả tim (Like) bài viết đang chọn.
+
+    F : Bật/tắt chế độ chỉ hiển thị bài đã thích.
+
+    V : Đổi giữa chế độ Lưới (Grid View) và Danh sách (Feed View).
+
+    M : Đổi nhanh Theme giao diện.
+
+    E / I : Export / Import dữ liệu thả tim (Backup/Restore).
+
+Lightbox (Xem phóng to)
+
+    J / → : Xem media tiếp theo.
+
+    K / ← : Xem media phía trước.
+
+    Esc : Đóng Lightbox.
+
+📄 Giấy phép (License)
+
+Mã nguồn được phát hành dưới giấy phép MIT License. Bạn có thể tự do sử dụng, chỉnh sửa và chia sẻ.
+
+
+Gemini là một AI và có thể mắc sai sót.
+Gemini
+Realtime
+Images
+Preview
+Export
+🌐 English
+
+# 📸 Tumblr-Style Offline Image & Video Archive Builder (`build_archive.py`)
+
+Một công cụ Python gọn nhẹ, mạnh mẽ giúp đóng gói toàn bộ bộ sưu tập ảnh và video offline của bạn thành **một file HTML duy nhất (`index.html`)** với giao diện phong cách Tumblr hiện đại, mượt mà và tối ưu hóa trải nghiệm người dùng trên cả PC và thiết bị di động.
+
+---
+
+## ✨ Tính năng nổi bật
+
+* 🚀 **Single-File Output & Full Offline**: Đóng gói giao diện HTML, CSS, JavaScript thành 1 file duy nhất. Dễ dàng lưu trữ, chia sẻ hoặc mở trực tiếp trên trình duyệt mà không cần Server/Node.js.
+* 🎨 **14+ Theme Catppuccin & Palette màu sắc đẹp mắt**: Hỗ trợ theme sáng/tối tự động (`auto`) hoặc lựa chọn thủ công: *Mocha, Frappe, Macchiato, Latte, Nord, Tokyo Night, Gruvbox, Rosé Pine, Oxblood, Noir Velvet...*
+* 📁 **Tự động gom nhóm bài viết (Tumblr-style Grouping)**:
+  * Nhận diện thông minh chuỗi ảnh/media cùng 1 post qua định dạng tên file của Tumblr (`o1`, `o2`), số hiệu (`128635952498_0.jpg`) hoặc tên series.
+  * Hỗ trợ gom nhóm thư mục con linh hoạt với tính năng **Lọc thư mục theo nhánh**.
+* 📝 **Hỗ trợ Ghi chú / Markdown Sidecar**: Tự động đọc nội dung file `.md` cùng tên với ảnh/bài viết để hiển thị chú thích, bài viết kèm theo.
+* 🎥 **Hỗ trợ Đa phương tiện**:
+  * **Hình ảnh**: `JPG`, `PNG`, `WEBP`, `AVIF`, `GIF`, `BMP`, `SVG`, `JXL`, `HEIC/HEIF`, `APNG`.
+  * **Video**: `MP4`, `WEBM`, `MOV`, `M4V`, `OGV`.
+* ⚡ **Hiệu năng cao & Lazy Loading**: Tải ảnh theo dạng cuộn trang (Infinite Scroll / Batch rendering) nhẹ nhàng, mượt mà ngay cả với hàng chục ngàn ảnh.
+* 🔍 **Tìm kiếm & Bộ lọc nâng cao**:
+  * Tìm kiếm tức thì theo số bài, tên file hoặc nội dung ghi chú.
+  * Lọc theo loại media (*Ảnh*, *GIF*, *Video*) hoặc bài viết đã thả tim (*Liked*).
+  * Chế độ hiển thị **Lưới gọn (Grid View)** hoặc **Danh sách (Feed View)**.
+* ⌨️ **Phím tắt điều hướng nhanh & Lightbox**: Trải nghiệm xem ảnh phóng to, chuyển bài bằng bàn phím (`J`/`K`, `Space`, `G`, `L`, `V`, `M`...) hoặc vuốt cảm ứng trên điện thoại.
+* 💾 **Backup / Restore dữ liệu Thích (Likes)**: Cho phép xuất/nhập danh sách bài viết đã thả tim dưới dạng file JSON.
+
+---
+
+## 🛠️ Yêu cầu hệ thống
+
+* **Python**: `Python 3.8+`
+* **Thư viện bên thứ ba**: **Không có!** Chỉ sử dụng Thư viện chuẩn (Standard Library) của Python.
+
+---
+
+## 🚀 Hướng dẫn nhanh (Quick Start)
+
+### 1. Cấu trúc thư mục chuẩn
+
+Đặt file `build_archive.py` cùng cấp với thư mục chứa ảnh/video của bạn (ví dụ `./images`):
+
+```text
+my-image-archive/
+├── build_archive.py
+├── config.yml (không bắt buộc)
+└── images/
+    ├── 128635952498_0.jpg
+    ├── 128635952498_1.jpg
+    ├── 128635952498_1.md        <-- (Tùy chọn) Chú thích cho bài viết dạng Markdown
+    ├── photo_2026-09-29.jpg
+    └── subfolder/
+        └── video_clip.mp4
 ```
 
-Các đường dẫn media trong HTML được tính tương đối từ vị trí `index.html`. Giữ nguyên quan hệ thư mục khi di chuyển archive, hoặc tạo lại HTML bằng `build_archive.py` ở vị trí mới. Mỗi thư mục media được quét đệ quy, và các file được gom bài riêng theo thư mục con. Khi cấu hình nhiều thư mục nguồn, mỗi bài có nhãn tên thư mục nguồn; cấu hình một thư mục thì nhãn này được ẩn.
+### 2. Chạy lệnh tạo Archive
 
-### Theme
-
-Theme có sẵn:
-
-- Catppuccin: `mocha`, `frappe`, `macchiato`, `latte`
-- Tối: `nord`, `tokyo-night`, `gruvbox`, `rose-pine`, `noir-velvet`, `oxblood`
-- Sáng: `nord-light`, `tokyo-night-light`, `gruvbox-light`, `rose-pine-dawn`
-
-Chọn `theme: auto` để dùng `theme_light`/`theme_dark` theo cài đặt sáng tối của thiết bị. Trong trang, mục **More** cho phép đổi theme trực tiếp và chuyển phong cách **Hiện đại/Cổ điển**. Lựa chọn giao diện được lưu trong `localStorage` của trình duyệt, riêng theo từng archive.
-
-## Dùng lệnh
+Chạy lệnh sau trong terminal:
 
 ```bash
-python3 build_archive.py --help
-python3 build_archive.py --images "/path/to/images"
-python3 build_archive.py --output "/path/to/index.html"
-python3 build_archive.py --title "Tên archive"
-python3 build_archive.py --theme noir-velvet
-python3 build_archive.py --sort-by created_desc
+python3 build_archive.py
 ```
 
-Các cờ `--images`, `--output`, `--title`, `--theme`, `--sort-by` ghi đè cấu hình tương ứng cho lần chạy đó. `--images` dùng một thư mục thay cho danh sách trong `config.yml`.
+Lệnh trên sẽ quét thư mục ảnh và tạo ra file **`index.html`**. Bạn chỉ cần click đúp vào `index.html` để mở bộ sưu tập trên trình duyệt!
 
-## Tính năng
+---
 
-- Gom media theo tên Tumblr (`tumblr_...o1`, `o2`...), chuỗi số (`128635952498_0`, `_1`...) hoặc mã + số thứ tự + tiêu đề chung (ví dụ `1h5bjv8 01 Cute Asian.jpg`).
-- Nạp feed theo từng đợt khi cuộn gần cuối; media bắt đầu tải khi gần vùng xem. Video không lấy metadata trước khi cần.
-- Tìm theo số thứ tự bài, tên file hoặc nội dung ghi chú Markdown; nhấn Enter để mở kết quả đầu.
-- Lọc nhiều loại media cùng lúc: ảnh, GIF, video. Lightbox điều hướng trong loại media đang lọc.
-- Đánh dấu bài yêu thích, lọc các bài đã thích và lưu vị trí đọc dở trong trình duyệt.
-- Lightbox có điều hướng bàn phím và vuốt ngang trên điện thoại.
-- Chế độ danh sách/lưới, theme động, phong cách Cổ điển/Hiện đại.
-- Sao lưu các bài đã thích và vị trí bằng chuỗi Base64 trong clipboard; nhập bằng cách dán chuỗi backup.
-- Hỗ trợ ghi chú Markdown `.md` cạnh media.
-- Nếu có `fav.icon`, `favicon.ico`, `favicon.png` hoặc `favicon.svg` cạnh script hay trong thư mục media, generator sẽ nhúng favicon vào HTML.
+## ⚙️ Cấu hình (`config.yml`)
 
-### Phím tắt
+Bạn có thể tạo file `config.yml` nằm cạnh script để tùy chỉnh mặc định:
 
-| Phím | Tác vụ |
-| --- | --- |
-| `J` / `↓` | Bài tiếp |
-| `K` / `↑` | Bài trước |
-| `Space` / `Shift+Space` | Tiến / lùi một bài |
-| `L` | Đánh dấu bài đang chọn là yêu thích |
-| `F` | Bật/tắt bộ lọc bài đã thích |
-| `G` | Mở tìm kiếm / nhảy tới bài |
-| `V` | Chuyển lưới/danh sách |
-| `M` | Mở lựa chọn theme |
-| `E` / `I` | Xuất / nhập bản sao lưu |
-| `T` | Lên đầu archive |
-| Trong Lightbox: `J` / `→`, `K` / `←`, `Esc` | Media tiếp, trước, đóng |
+```yaml
+# Tiêu đề bộ sưu tập
+title: "BST Ảnh Của Tôi"
 
-## Định dạng media
+# Đường dẫn thư mục chứa media (hoặc danh sách các thư mục)
+images_dir: "images"
+# Hoặc khai báo nhiều thư mục:
+# images_dirs:
+#   - "album_2025"
+#   - "album_2026"
+# Hoặc quét tất cả thư mục con:
+# images_dirs: "all"
 
-Generator nhận JPG/JPEG, PNG/APNG, GIF, WEBP, AVIF, BMP, SVG, JXL, HEIC/HEIF, MP4, WEBM, MOV, M4V và OGV. Khả năng giải mã ảnh và codec video tùy trình duyệt/thiết bị; file được nhận diện không đảm bảo mọi trình duyệt đều phát được.
+# Giao diện mặc định (auto, mocha, nord, tokyo-night, rose-pine, ...)
+theme: "auto"
+theme_light: "rose-pine-dawn"
+theme_dark: "mocha"
 
-## Lưu ý
+# Sắp xếp: name (theo tên), created (ngày cũ nhất trước), created_desc (mới nhất trước)
+sort_by: "created_desc"
 
-- Archive là trang tĩnh: bài đã thích, theme, phong cách và vị trí đọc được lưu trên trình duyệt hiện tại; chúng không tự đồng bộ giữa thiết bị.
-- Backup Base64 chỉ mã hóa cách biểu diễn dữ liệu, không phải mã hóa bảo mật. Chỉ chia sẻ chuỗi sao lưu với người đáng tin cậy.
-- GIF và video dung lượng lớn vẫn cần tải dữ liệu khi xem. Lazy loading giúp tránh tải media ở xa, nhưng không làm file nguồn nhỏ hơn.
-- Khi publish lên web, tải `index.html` cùng toàn bộ thư mục media được tham chiếu; bảo đảm đường dẫn tương đối còn đúng.
+# Cài đặt giao diện
+sticky_header: "true"
+show_filename: "false"
+show_created_time: "false"
+show_file_size: "false"
+show_video_thumbnails: "false"
+```
 
+---
 
-## Đưa dự án lên GitHub
+## 💻 Tham số dòng lệnh (CLI Options)
 
-Tên repository gợi ý: **`offline-media-archive`**. File `.gitignore` đi kèm loại trừ cấu hình cá nhân, media, HTML archive được tạo và metadata của macOS. Trước khi public repository, cần kiểm tra các tệp đã được Git theo dõi từ trước; `.gitignore` không tự gỡ các tệp đã được commit.
+Bạn có thể ghi đè cài đặt từ `config.yml` bằng các tham số CLI:
+
+```bash
+python3 build_archive.py [options]
+```
+
+| Tham số | Mô tả |
+| :--- | :--- |
+| `--images <path>` | Chỉ định đường dẫn thư mục media (Ghi đè `config.yml`). |
+| `--output <path>` | Chỉ định đường dẫn file HTML xuất ra (Mặc định: `index.html`). |
+| `--title <text>` | Đặt tiêu đề cho Archive. |
+| `--theme <theme>` | Đặt theme màu sắc (Ví dụ: `mocha`, `nord`, `tokyo-night`, `latte`...). |
+| `--sort-by <type>` | Kiểu sắp xếp: `name`, `created`, `created_desc`. |
+
+**Ví dụ:**
+
+```bash
+# Tạo archive từ thư mục ./my_photos với theme Tokyo Night và sắp xếp mới nhất lên đầu
+python3 build_archive.py --images ./my_photos --title "Kỷ Niệm 2026" --theme tokyo-night --sort-by created_desc --output gallery.html
+```
+
+---
+
+## ⌨️ Phím tắt điều hướng (Keyboard Shortcuts)
+
+Khi đang mở trang HTML Archive, bạn có thể dùng các phím tắt sau:
+
+### Duyệt bài (Feed View)
+* <kbd>J</kbd> / <kbd>↓</kbd> : Chuyển xuống bài tiếp theo.
+* <kbd>K</kbd> / <kbd>↑</kbd> : Quay lại bài trước.
+* <kbd>Space</kbd> / <kbd>Shift</kbd> + <kbd>Space</kbd> : Cuộn nhanh tới/lùi.
+* <kbd>T</kbd> : Nhảy lên đầu trang.
+
+### Công cụ & Thao tác
+* <kbd>G</kbd> : Mở ô tìm kiếm bài viết / media.
+* <kbd>L</kbd> : Thả tim (Like) bài viết đang chọn.
+* <kbd>F</kbd> : Bật/tắt chế độ chỉ hiển thị bài đã thích.
+* <kbd>V</kbd> : Đổi giữa chế độ **Lưới (Grid View)** và **Danh sách (Feed View)**.
+* <kbd>M</kbd> : Đổi nhanh Theme giao diện.
+* <kbd>E</kbd> / <kbd>I</kbd> : Export / Import dữ liệu thả tim (Backup/Restore).
+
+### Lightbox (Xem phóng to)
+* <kbd>J</kbd> / <kbd>→</kbd> : Xem media tiếp theo.
+* <kbd>K</kbd> / <kbd>←</kbd> : Xem media phía trước.
+* <kbd>Esc</kbd> : Đóng Lightbox.
+
+---
+
+## 📄 Giấy phép (License)
+
+Mã nguồn được phát hành dưới giấy phép **MIT License**. Bạn có thể tự do sử dụng, chỉnh sửa và chia sẻ.
