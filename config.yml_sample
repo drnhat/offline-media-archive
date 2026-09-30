@@ -1,48 +1,86 @@
-# Mẫu cấu hình cho Offline Media Archive v2.14
-# Sao chép file này thành config.yml rồi chỉnh các giá trị bên dưới.
+# ============================================================================
+#  config.yml — cấu hình cho build_archive.py (v3.0)
+#  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
+#  Bỏ dấu # ở đầu dòng để bật một tùy chọn. Mọi tùy chọn đều có giá trị mặc định.
+# ============================================================================
 
-# Tên hiển thị trên trang. Để trống sẽ tự dùng: tên thư mục chứa build_archive.py + " Archive".
-title: "Offline Media Archive"
+# --- Nội dung ---------------------------------------------------------------
 
-# Danh sách thư mục chứa ảnh/video, tính đường dẫn tương đối từ vị trí config.yml.
-# Mỗi thư mục được quét đệ quy, bao gồm mọi thư mục con.
-# Một thư mục: giữ lại dòng images bên dưới.
-# Nhiều thư mục: thêm mỗi đường dẫn thành một dòng - "...".
-# Tự tìm mọi thư mục con cấp một có media: dùng duy nhất images_dirs: [all].
-# Khi dùng nhiều thư mục, tên thư mục nguồn hiện dưới mỗi bài đăng.
-images_dirs:
-  - "images"
-  # - "../archive-2/images"
-  # - "../archive-3/images"
+# Tên hiển thị trên đầu trang. Để trống = "<tên thư mục chứa script> Archive".
+title: My Archive
 
-# Có thể dùng images_dir: "images" thay cho images_dirs nếu chỉ có một thư mục.
-# Nếu không khai báo thư mục, chương trình tự tìm Images/ hoặc images/ cạnh build_archive.py
-# và trong thư mục làm việc hiện tại.
+# Thư mục chứa ảnh/video (quét cả thư mục con). Đường dẫn tương đối tính từ
+# vị trí của config.yml; đường dẫn tuyệt đối cũng được.
+# Nếu không khai báo gì, script tự tìm thư mục "Images" hoặc "images" cạnh nó.
+images_dir: Images
 
-# Theme lúc tạo trang: auto hoặc một theme có sẵn.
-# auto dùng theme_light/theme_dark dựa trên giao diện sáng/tối của thiết bị.
-theme: "auto"
-theme_light: "rose-pine-dawn"
-theme_dark: "noir-velvet"
+# Nhiều thư mục: dùng danh sách bên dưới (sẽ thay thế images_dir).
+# Khi có từ 2 thư mục trở lên, mỗi bài hiện nhãn thư mục nguồn và menu Lọc
+# có thêm mục chọn thư mục.
+# images_dirs:
+#   - Images
+#   - D:/Pictures/Tumblr
+#   - ../Backup/Memes
+#
+# Hoặc dạng gọn:  images_dirs: [Images, Videos]
+# Đặc biệt:      images_dirs: [all]   → dùng mọi thư mục con (có chứa media) cạnh config.yml
 
-# Thứ tự bài: name (mặc định), created (cũ đến mới), created_desc (mới đến cũ).
-sort_by: "name"
+# --- Giao diện ----------------------------------------------------------------
 
-# Header ghim ở trên khi cuộn.
+# Theme: auto | mocha | frappe | macchiato | latte | nord | tokyo-night | gruvbox
+#        | rose-pine | noir-velvet | oxblood | nord-light | tokyo-night-light
+#        | gruvbox-light | rose-pine-dawn | dracula | solarized-dark
+#        | solarized-light | midnight | sakura
+# "auto" = tự chuyển sáng/tối theo hệ điều hành, dùng hai theme bên dưới.
+# Người xem vẫn đổi được theme ngay trên trang (phím M) và trình duyệt sẽ nhớ lựa chọn.
+theme: auto
+theme_light: rose-pine-dawn
+theme_dark: mocha
+
+# Bố cục mặc định khi mở lần đầu: feed (danh sách kiểu Tumblr) | grid (lưới masonry)
+default_view: feed
+
+# Số cột của lưới: 0 = tự động theo độ rộng màn hình, hoặc 1–10.
+columns: 0
+
+# Độ rộng cột đọc ở chế độ feed, tính bằng px (480–1100).
+feed_width: 720
+
+# Thanh tiêu đề dính ở đầu trang khi cuộn: true | false
 sticky_header: true
 
-# Thông tin hiển thị dưới media. Mặc định đều tắt để giao diện gọn hơn.
+# --- Thứ tự bài -------------------------------------------------------------
+
+# name         : theo tên file (thứ tự tự nhiên: 2 đứng trước 10)
+# created      : ngày tạo, cũ nhất trước
+# created_desc : ngày tạo, mới nhất trước
+sort_by: name
+
+# --- Thông tin hiển thị dưới mỗi media ----------------------------------------
+
 show_filename: false
 show_created_time: false
 show_file_size: false
+# Kích thước điểm ảnh, ví dụ 1200×800
+show_dimensions: false
 
-# Bật để tải metadata và dùng fragment #t=0.1 tạo thumbnail video; mặc định tắt để giảm tải.
+# --- Video --------------------------------------------------------------------
+
+# true  : hiện khung hình đầu của video làm ảnh xem trước (tải nhiều dữ liệu hơn)
+# false : chỉ tải video khi bấm phát (nhanh và nhẹ hơn)
 show_video_thumbnails: false
+# Tự phát video (tắt tiếng, lặp lại) khi cuộn tới; tạm dừng khi cuộn đi.
+video_autoplay: false
 
-# Số cấp thư mục con dùng trong bộ lọc: 0 chỉ lọc thư mục nguồn; 1, 2, 3... lọc sâu hơn.
+# --- Bộ lọc thư mục -----------------------------------------------------------
+
+# Số cấp thư mục con dùng làm mục lọc (0 = tắt lọc theo thư mục con).
+# Ví dụ: Images/Anime/2023/x.jpg → depth 1 tạo mục "Images/Anime".
 folder_filter_depth: 1
 
-# Các theme có sẵn:
-# Catppuccin: mocha, frappe, macchiato, latte
-# Tối: nord, tokyo-night, gruvbox, rose-pine, noir-velvet, oxblood
-# Sáng: nord-light, tokyo-night-light, gruvbox-light, rose-pine-dawn
+# --- Hiệu năng khi build ------------------------------------------------------
+
+# true : đọc kích thước ảnh lúc build (có cache) để trang không bị nhảy layout
+#        khi ảnh tải, và masonry dựng chính xác. Nên để bật.
+# false: bỏ qua bước này (build nhanh hơn một chút, nhưng trang kém mượt).
+probe_dimensions: true

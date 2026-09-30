@@ -5,6 +5,7 @@ config*.yml
 .env
 .env.*
 !.env.example
+.build_archive_cache.json
 
 # Archive HTML sinh ra có thể chứa tên file và cấu trúc dữ liệu cá nhân
 /index.html
