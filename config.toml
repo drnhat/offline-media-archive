@@ -1,5 +1,5 @@
 # ============================================================================
-#  config.toml — cấu hình cho build_archive.py (v3.1, cần Python 3.11+)
+#  config.toml — cấu hình cho build_archive.py (v3.2, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
 #  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
 #
@@ -31,6 +31,18 @@ images_dir = "Images"
 #
 # Đặc biệt: images_dirs = ["all"]  → dùng mọi thư mục con (có chứa media) cạnh config.toml
 
+# Thư mục/mẫu cần BỎ QUA khi quét (không đi vào bên trong). Không phân biệt hoa thường,
+# hỗ trợ ký tự đại diện * ? [abc]:
+#   "Thumbs"        → mọi thư mục tên Thumbs, ở bất kỳ cấp nào
+#   "_old*"         → mọi thư mục có tên bắt đầu bằng _old
+#   "Anime/2023"    → đúng đường dẫn này, tính từ thư mục media (mẫu có dấu / so khớp cả đường dẫn)
+#   "*/private"     → thư mục private ở bất kỳ nơi nào bên dưới một thư mục khác
+#   "D:/Pictures/Tam" hoặc "~/Backup" → đường dẫn tuyệt đối: bỏ qua thư mục đó và mọi thứ trong nó
+# Có thể thêm bằng dòng lệnh:  python build_archive.py --ignore Thumbs --ignore "Anime/2023"
+# Lưu ý: đổi danh sách này làm thay đổi tập bài, nên bài đã thích/vị trí đọc cũ có thể không khớp nữa
+# (hãy sao lưu trước bằng phím E).
+# ignored_folders = ["Thumbs", "_old*", "Anime/2023"]
+
 # --- Giao diện ----------------------------------------------------------------
 
 # Theme: "auto" hoặc một trong:
@@ -54,6 +66,22 @@ feed_width = 720
 
 # Thanh tiêu đề dính ở đầu trang khi cuộn.
 sticky_header = true
+
+# --- Icon ứng dụng (iPhone/iPad: Chia sẻ → Thêm vào Màn hình chính) -----------------
+
+# Đường dẫn file PNG dùng làm icon (nên 180×180, không trong suốt). Tương đối tính từ
+# vị trí config.toml. Nếu để trống, script tự dùng apple-touch-icon.png / app-icon.png /
+# icon.png cạnh config.toml nếu có; không có thì TỰ VẼ một icon mặc định theo màu theme.
+# Cài Pillow (pip install pillow) để dùng được JPG/WEBP/PNG kích thước bất kỳ:
+# script sẽ tự cắt vuông, thu về 180×180 và dán lên nền đặc.
+# app_icon = "icon.png"
+
+# Tên ngắn dưới icon trên Màn hình chính (iOS cắt khoảng 12 ký tự). Để trống = dùng title.
+# app_name = "Archive"
+
+# Thanh trạng thái khi mở từ Màn hình chính: "black-translucent" (nội dung tràn lên
+# dưới thanh trạng thái, đẹp nhất), "default" hoặc "black".
+app_status_bar = "black-translucent"
 
 # --- Thứ tự bài -------------------------------------------------------------
 

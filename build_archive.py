@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.1).
+"""Tumblr-style offline media archive builder (v3.2).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
 MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
@@ -17,6 +17,7 @@ if sys.version_info < (3, 11):
 
 import argparse
 import base64
+import fnmatch
 import hashlib
 import json
 import os
@@ -26,13 +27,14 @@ import struct
 import time
 import tomllib
 import webbrowser
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from html import escape as html_escape
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.1"
+VERSION = "3.2"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -101,6 +103,9 @@ ICONS = {
     "link": ("0 0 24 24", '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
     "minus": ("0 0 24 24", '<path d="M5 12h14"/>'),
     "plus": ("0 0 24 24", '<path d="M5 12h14"/><path d="M12 5v14"/>'),
+    "bookmark": ("0 0 24 24", '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>'),
+    "pencil": ("0 0 24 24", '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>'),
+    "trash": ("0 0 24 24", '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>'),
 }
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg", ".apng", ".jxl", ".heic", ".heif"}
@@ -174,6 +179,54 @@ def image_group_id(filename: str) -> str:
 # --------------------------------------------------------------------------- #
 # Quét thư mục (một lượt duy nhất, dùng os.scandir nên stat gần như miễn phí)
 # --------------------------------------------------------------------------- #
+class IgnoreRules:
+    """Quy tắc bỏ qua thư mục (không quét vào bên trong).
+
+    Mẫu không có "/"  → so khớp TÊN thư mục ở mọi cấp (vd. "Thumbs", "_old*").
+    Mẫu có "/"        → so khớp đường dẫn tương đối tính từ thư mục media (vd. "Anime/2023", "*/private").
+    Mẫu là đường dẫn tuyệt đối hoặc bắt đầu bằng "~" → bỏ qua đúng thư mục đó và mọi thứ bên trong.
+    Ký tự đại diện kiểu shell (* ? [abc]); không phân biệt hoa thường.
+    """
+
+    def __init__(self, patterns=()) -> None:
+        self.names: list[str] = []
+        self.paths: list[str] = []
+        self.absolute: list[str] = []
+        self.skipped = 0
+        for raw in patterns:
+            pattern = str(raw).strip().replace("\\", "/")
+            while pattern.startswith("./"):
+                pattern = pattern[2:]
+            pattern = pattern.rstrip("/")
+            if not pattern:
+                continue
+            expanded = os.path.expanduser(pattern)
+            if os.path.isabs(expanded) or re.match(r"^[A-Za-z]:/", pattern):
+                self.absolute.append(os.path.normcase(os.path.realpath(expanded)))
+            elif "/" in pattern:
+                self.paths.append(pattern.casefold())
+            else:
+                self.names.append(pattern.casefold())
+
+    def __bool__(self) -> bool:
+        return bool(self.names or self.paths or self.absolute)
+
+    def matches(self, name: str, rel: str, full: str) -> bool:
+        hit = False
+        folded = name.casefold()
+        if any(fnmatch.fnmatchcase(folded, p) for p in self.names):
+            hit = True
+        elif self.paths:
+            rel_folded = rel.casefold()
+            hit = any(fnmatch.fnmatchcase(rel_folded, p) for p in self.paths)
+        if not hit and self.absolute:
+            real = os.path.normcase(os.path.realpath(full))
+            hit = any(real == a or real.startswith(a + os.sep) for a in self.absolute)
+        if hit:
+            self.skipped += 1
+        return hit
+
+
 class MediaFile(NamedTuple):
     rel: str        # đường dẫn tương đối theo thư mục media, dạng posix
     path: Path
@@ -182,7 +235,7 @@ class MediaFile(NamedTuple):
     mtime_ns: int
 
 
-def scan_folder(root: Path) -> tuple[list[MediaFile], dict[str, Path]]:
+def scan_folder(root: Path, ignore: IgnoreRules | None = None) -> tuple[list[MediaFile], dict[str, Path]]:
     """Trả về (danh sách media đã sắp xếp tự nhiên, bảng ghi chú .md theo tên bỏ đuôi)."""
     media: list[MediaFile] = []
     notes: dict[str, Path] = {}
@@ -206,6 +259,8 @@ def scan_folder(root: Path) -> tuple[list[MediaFile], dict[str, Path]]:
                 rel = prefix + name
                 try:
                     if entry.is_dir():
+                        if ignore is not None and ignore.matches(name, rel, entry.path):
+                            continue
                         stack.append((entry.path, rel + "/"))
                         continue
                     if not entry.is_file():
@@ -222,10 +277,19 @@ def scan_folder(root: Path) -> tuple[list[MediaFile], dict[str, Path]]:
     return media, notes
 
 
-def folder_has_media(root: Path) -> bool:
+def folder_has_media(root: Path, ignore: IgnoreRules | None = None) -> bool:
     """Kiểm tra nhanh (dừng ngay khi gặp file đầu tiên) xem thư mục có media không."""
     for current, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in IGNORED_MEDIA_DIRS]
+        rel_current = os.path.relpath(current, root).replace(os.sep, "/")
+        kept = []
+        for d in dirs:
+            if d.startswith(".") or d in IGNORED_MEDIA_DIRS:
+                continue
+            rel = d if rel_current == "." else f"{rel_current}/{d}"
+            if ignore is not None and ignore.matches(d, rel, os.path.join(current, d)):
+                continue
+            kept.append(d)
+        dirs[:] = kept
         for name in files:
             if not name.startswith(".") and os.path.splitext(name)[1].casefold() in MEDIA_EXTENSIONS:
                 return True
@@ -390,11 +454,15 @@ class SizeCache:
         self.path = path
         self.entries: dict[str, list[int]] = {}
         self.used: dict[str, list[int]] = {}
+        self.extra: dict[str, str] = {}
+        self.extra_dirty = False
         if path is not None:
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict) and raw.get("v") == self.VERSION and isinstance(raw.get("f"), dict):
                     self.entries = raw["f"]
+                    if isinstance(raw.get("x"), dict):
+                        self.extra = {k: v for k, v in raw["x"].items() if isinstance(v, str)}
             except (OSError, ValueError):
                 pass
 
@@ -415,10 +483,12 @@ class SizeCache:
         merged = {k: v for k, v in self.entries.items()
                   if not any(k.startswith(prefix) for prefix in scanned_prefixes)}
         merged.update(self.used)
-        if merged == self.entries:
+        if merged == self.entries and not self.extra_dirty:
             return
         try:
-            self.path.write_text(json.dumps({"v": self.VERSION, "f": merged}, separators=(",", ":")), encoding="utf-8")
+            self.path.write_text(json.dumps({"v": self.VERSION, "f": merged, "x": self.extra}, separators=(",", ":")), encoding="utf-8")
+            self.entries = merged
+            self.extra_dirty = False
         except OSError:
             pass
 
@@ -442,6 +512,132 @@ def probe_media_sizes(files: list[MediaFile], cache: SizeCache, workers: int) ->
                 cache.store(str(media.path), media.size, media.mtime_ns, width, height)
                 result[str(media.path)] = (width, height)
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Icon ứng dụng (apple-touch-icon): dùng icon của bạn hoặc tự vẽ icon mặc định
+# --------------------------------------------------------------------------- #
+APP_ICON_SIZE = 180
+APP_ICON_CANDIDATES = ("apple-touch-icon.png", "app-icon.png", "icon.png")
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+STATUS_BAR_STYLES = ("default", "black", "black-translucent")
+
+
+def _hex_rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[float, float, float]:
+    return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t
+
+
+def _png_encode(width: int, height: int, rgb: bytes) -> bytes:
+    stride = width * 3
+    raw = b"".join(b"\x00" + rgb[y * stride:(y + 1) * stride] for y in range(height))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    return (PNG_SIGNATURE + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def render_default_icon(top: str, bottom: str, ink: str, size: int = APP_ICON_SIZE) -> bytes:
+    """Vẽ icon 'chồng ảnh' bằng Python thuần (không cần Pillow), khử răng cưa 2×2. Không trong suốt để iOS không tô nền đen."""
+    c_top, c_bottom, c_ink = _hex_rgb(top), _hex_rgb(bottom), _hex_rgb(ink)
+    white = (252, 252, 254)
+    ss = 2
+    rows = bytearray()
+    for y in range(size):
+        for x in range(size):
+            acc_r = acc_g = acc_b = 0.0
+            for sy in range(ss):
+                py = (y + (sy + 0.5) / ss) / size
+                for sx in range(ss):
+                    px = (x + (sx + 0.5) / ss) / size
+                    r, g, b = _mix(c_top, c_bottom, (px + py) / 2)
+                    # thẻ ảnh phía sau (mờ)
+                    dx = max(abs(px - 0.43) - 0.18, 0.0)
+                    dy = max(abs(py - 0.43) - 0.20, 0.0)
+                    if dx * dx + dy * dy <= 0.07 * 0.07:
+                        r, g, b = r * 0.5 + 127.5, g * 0.5 + 127.5, b * 0.5 + 127.5
+                    # thẻ ảnh phía trước
+                    dx = max(abs(px - 0.54) - 0.18, 0.0)
+                    dy = max(abs(py - 0.56) - 0.20, 0.0)
+                    if dx * dx + dy * dy <= 0.07 * 0.07:
+                        r, g, b = white
+                        if (px - 0.635) ** 2 + (py - 0.45) ** 2 <= 0.045 ** 2:      # mặt trời
+                            r, g, b = _mix(c_top, c_bottom, 0.5)
+                        elif py <= 0.735 and py >= 0.60 + abs(px - 0.64) * 1.25:      # núi nhỏ (phía sau)
+                            r, g, b = _mix(c_ink, c_top, 0.5)
+                        if py <= 0.735 and py >= 0.52 + abs(px - 0.50) * 1.6:         # núi lớn (phía trước)
+                            r, g, b = c_ink
+                    acc_r += r
+                    acc_g += g
+                    acc_b += b
+            n = ss * ss
+            rows += bytes((round(acc_r / n), round(acc_g / n), round(acc_b / n)))
+    return _png_encode(size, size, bytes(rows))
+
+
+def _icon_with_pillow(data: bytes, background: str, size: int = APP_ICON_SIZE) -> bytes | None:
+    """Nếu có Pillow: cắt vuông, thu về 180×180, dán lên nền đặc (iOS hiện nền trong suốt thành đen)."""
+    try:
+        from PIL import Image
+        import io
+    except ImportError:
+        return None
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image = source.convert("RGBA")
+        side = min(image.size)
+        left, top = (image.width - side) // 2, (image.height - side) // 2
+        image = image.crop((left, top, left + side, top + side)).resize((size, size), Image.LANCZOS)
+        canvas = Image.new("RGB", (size, size), _hex_rgb(background))
+        canvas.paste(image, mask=image.split()[3])
+        out = io.BytesIO()
+        canvas.save(out, "PNG", optimize=True)
+        return out.getvalue()
+    except (OSError, ValueError):
+        return None
+
+
+def prepare_app_icon(icon_path: Path | None, theme: dict, cache: SizeCache, warn) -> tuple[bytes, str]:
+    """Trả về (bytes PNG, nguồn) với nguồn là 'custom' hoặc 'default'."""
+    if icon_path is not None:
+        if not icon_path.is_file():
+            warn(f"Không tìm thấy app_icon: {icon_path} — dùng icon mặc định.")
+        else:
+            try:
+                data = icon_path.read_bytes()
+            except OSError as exc:
+                warn(f"Không đọc được app_icon ({exc}) — dùng icon mặc định.")
+            else:
+                converted = _icon_with_pillow(data, theme["base"])
+                if converted is not None:
+                    return converted, "custom"
+                if data.startswith(PNG_SIGNATURE):
+                    if probe_size(icon_path) != (APP_ICON_SIZE, APP_ICON_SIZE):
+                        warn(f"app_icon nên là PNG {APP_ICON_SIZE}×{APP_ICON_SIZE} không trong suốt "
+                             f"(cài Pillow để tự chuyển đổi); vẫn dùng file này.")
+                    return data, "custom"
+                warn("app_icon cần là file PNG (hoặc cài Pillow để dùng JPG/WEBP/…) — dùng icon mặc định.")
+    top, bottom = theme["mauve"], theme["blue"]
+    ink = "#%02x%02x%02x" % tuple(round(v) for v in _mix(_hex_rgb(theme["crust"]), _hex_rgb(theme["mauve"]), 0.35))
+    key = "icon1:" + hashlib.sha1(f"{top}{bottom}{ink}{APP_ICON_SIZE}".encode()).hexdigest()[:16]
+    cached = cache.extra.get(key)
+    if cached:
+        try:
+            return base64.b64decode(cached), "default"
+        except ValueError:
+            pass
+    png = render_default_icon(top, bottom, ink)
+    cache.extra = {k: v for k, v in cache.extra.items() if not k.startswith("icon1:")}
+    cache.extra[key] = base64.b64encode(png).decode("ascii")
+    cache.extra_dirty = True
+    return png, "default"
 
 
 # --------------------------------------------------------------------------- #
@@ -554,12 +750,14 @@ DEFAULT_CONFIG: dict[str, object] = {
     "show_created_time": False, "show_file_size": False, "show_video_thumbnails": False,
     "show_dimensions": False, "folder_filter_depth": 1, "default_view": "feed", "columns": 0,
     "feed_width": 720, "probe_dimensions": True, "video_autoplay": False,
+    "ignored_folders": [], "app_icon": "", "app_name": "", "app_status_bar": "black-translucent",
 }
 CONFIG_ALIASES = {
     "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
     "image_folders": "images_dirs", "folders": "images_dirs", "sort": "sort_by", "order": "sort_by",
     "view": "default_view", "layout": "default_view", "cols": "columns", "width": "feed_width",
-    "autoplay": "video_autoplay",
+    "autoplay": "video_autoplay", "ignore_folders": "ignored_folders", "exclude_folders": "ignored_folders",
+    "ignore": "ignored_folders", "exclude": "ignored_folders", "icon": "app_icon", "apple_touch_icon": "app_icon",
 }
 
 
@@ -888,6 +1086,30 @@ body{background:radial-gradient(ellipse 70% 30rem at 50% -14rem,color-mix(in srg
 .search-tools{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .search-tools .btn{flex:none;padding:6px 11px;font-size:12px}
 .btn:disabled{opacity:.45;cursor:default;pointer-events:none}
+
+/* ---------- Bộ lọc đã lưu ---------- */
+.save-row{display:flex;gap:8px}
+.save-row input,.rename-input{flex:1;min-width:0;padding:9px 12px;border:1px solid var(--surface1);border-radius:11px;background:var(--base);font:inherit}
+.saved-list{display:grid;gap:8px}
+.saved-item{display:flex;align-items:center;gap:4px;padding:5px;border:1px solid var(--surface0);border-radius:14px;background:color-mix(in srgb,var(--surface0) 40%,var(--mantle))}
+.saved-item.on{border-color:var(--mauve);background:color-mix(in srgb,var(--mauve) 11%,var(--surface0))}
+.saved-apply{flex:1;min-width:0;display:grid;gap:2px;padding:6px 9px;border:0;border-radius:10px;background:none;text-align:left}
+.saved-apply:hover{background:color-mix(in srgb,var(--mauve) 12%,transparent)}
+.saved-apply b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.saved-apply small{display:flex;min-width:0;color:var(--subtext);font-size:11px;white-space:nowrap}
+.saved-apply small .desc{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.saved-apply small .cnt{flex:none}
+.icon-btn{flex:none;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid transparent;border-radius:10px;background:none;color:var(--subtext);font-size:16px}
+.icon-btn:hover{color:var(--text);border-color:var(--surface1);background:var(--surface0)}
+.icon-btn.danger:hover{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.saved-empty{padding:18px 10px;text-align:center;color:var(--subtext);font-size:13px}
+.item.on{background:color-mix(in srgb,var(--mauve) 16%,var(--surface0));font-weight:650}
+.item .item-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- Chế độ ứng dụng iOS (Thêm vào Màn hình chính) ---------- */
+.site-header{padding-top:env(safe-area-inset-top,0px)}
+#toast{top:calc(15px + env(safe-area-inset-top,0px))}
+@media(display-mode:standalone){body{overscroll-behavior-y:none}}
 '''
 
 BODY = r'''</style>
@@ -927,7 +1149,7 @@ __SPRITE__
     </nav>
   </div>
   <div class="chip-bar" id="chipBar" hidden>
-    <span class="s-chip" role="status"><button class="chip-main" id="chipMain" type="button" title="Sửa nội dung lọc"><span data-ic="search"></span><b id="chipText"></b><em id="chipCount"></em></button><button class="chip-x" id="chipClear" type="button" title="Bỏ lọc tìm kiếm (Esc)" aria-label="Bỏ lọc tìm kiếm"><span data-ic="x"></span></button></span>
+    <span class="s-chip" role="status"><button class="chip-main" id="chipMain" type="button" title="Sửa nội dung lọc"><span data-ic="search"></span><b id="chipText"></b><em id="chipCount"></em></button><button class="chip-x" id="chipSave" type="button" title="Lưu bộ lọc này (B)" aria-label="Lưu bộ lọc này"><span data-ic="bookmark"></span></button><button class="chip-x" id="chipClear" type="button" title="Bỏ lọc tìm kiếm (Esc)" aria-label="Bỏ lọc tìm kiếm"><span data-ic="x"></span></button></span>
   </div>
   <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
 </header>
@@ -941,6 +1163,10 @@ __SPRITE__
   <div class="filter-wrap" id="filterWrap">
     <button class="tb" id="filterMenuToggle" type="button" aria-label="Mở bộ lọc" title="Bộ lọc" aria-expanded="false"><span data-ic="filter"></span><span class="lbl">Lọc</span></button>
     <div class="menu filter-pop" id="filterPop" role="group" aria-label="Bộ lọc">
+      <div class="menu-h">Bộ lọc đã lưu</div>
+      <div id="savedQuick"></div>
+      <button class="item" id="savedManage" type="button"><span data-ic="bookmark"></span>Lưu / quản lý bộ lọc…</button>
+      <div class="menu-sep"></div>
       <div class="menu-h">Loại nội dung</div>
       <label class="check"><input id="filterAll" type="checkbox" checked><span>Tất cả</span></label>
       <label class="check"><input class="type-check" data-kind="0" type="checkbox" checked><span>Ảnh</span><em id="cntImage"></em></label>
@@ -1010,9 +1236,19 @@ __SPRITE__
   </div>
 </section>
 
+<section class="overlay" id="savedDlg" role="dialog" aria-modal="true" aria-labelledby="savedTitle">
+  <div class="sheet" style="width:min(600px,100%)">
+    <div class="sheet-head"><div><h2 id="savedTitle">Bộ lọc đã lưu</h2><p>Lưu tổ hợp lọc đang bật để dùng lại chỉ với một cú bấm.</p></div><button class="x-btn" id="savedClose" type="button" aria-label="Đóng"><span data-ic="x"></span></button></div>
+    <p class="hint" id="savedCurrent"></p>
+    <div class="save-row"><input id="savedName" type="text" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Tên bộ lọc"><button class="btn primary" id="savedSave" type="button"><span data-ic="bookmark"></span>Lưu</button></div>
+    <div class="menu-sep" style="margin:16px 0 12px"></div>
+    <div class="saved-list" id="savedList"></div>
+  </div>
+</section>
+
 <section class="overlay" id="backupDlg" role="dialog" aria-modal="true" aria-labelledby="backupTitle">
   <div class="sheet" style="width:min(560px,100%)">
-    <div class="sheet-head"><div><h2 id="backupTitle">Sao lưu &amp; khôi phục</h2><p>Bài đã thích và vị trí đang xem được lưu trong trình duyệt. Sao lưu để chuyển sang máy khác.</p></div><button class="x-btn" id="backupClose" type="button" aria-label="Đóng"><span data-ic="x"></span></button></div>
+    <div class="sheet-head"><div><h2 id="backupTitle">Sao lưu &amp; khôi phục</h2><p>Bài đã thích, vị trí đang xem và bộ lọc đã lưu nằm trong trình duyệt. Sao lưu để chuyển sang máy khác.</p></div><button class="x-btn" id="backupClose" type="button" aria-label="Đóng"><span data-ic="x"></span></button></div>
     <p class="hint" id="backupStat"></p>
     <div class="btn-row" style="margin-top:0"><button class="btn primary" id="expFile" type="button"><span data-ic="download"></span>Tải file backup</button><button class="btn" id="expCopy" type="button"><span data-ic="copy"></span>Sao chép chuỗi</button></div>
     <div class="menu-sep" style="margin:16px 0"></div>
@@ -1037,6 +1273,7 @@ __SPRITE__
         <div class="sc"><span><b>Tìm / nhảy tới bài</b><small>Số bài, tên file, ghi chú, is:video…</small></span><kbd>G</kbd></div>
         <div class="sc"><span><b>Lọc danh sách theo tìm kiếm</b><small>Chỉ xem các bài khớp · Esc để bỏ lọc</small></span><kbd>⇧ Enter</kbd></div>
         <div class="sc"><span><b>Thích / lọc bài đã thích</b><small>Lưu bài yêu thích</small></span><kbd>L</kbd><kbd>F</kbd></div>
+        <div class="sc"><span><b>Bộ lọc đã lưu</b><small>Lưu, áp dụng, đổi tên, xóa</small></span><kbd>B</kbd></div>
         <div class="sc"><span><b>Đổi bố cục</b><small>Danh sách ⇄ lưới masonry</small></span><kbd>V</kbd></div>
         <div class="sc"><span><b>Đổi theme</b><small>Chọn giao diện màu</small></span><kbd>M</kbd></div>
         <div class="sc"><span><b>Sao lưu / khôi phục</b><small>File hoặc chuỗi Base64</small></span><kbd>E</kbd><kbd>I</kbd></div>
@@ -1054,6 +1291,7 @@ __SPRITE__
       <li>Lưới masonry cân cột thật, chọn số cột; ảnh có kích thước sẵn nên trang không bị nhảy khi tải.</li>
       <li>Xem ảnh: phóng to/kéo, chụm 2 ngón, trình chiếu, toàn màn hình, tải xuống, bảng thông tin, tải trước ảnh kế bên.</li>
       <li>Tìm kiếm có toán tử (is:video, is:gif, is:multi, is:liked, is:note), duyệt bằng phím mũi tên.</li>
+      <li>Mới ở 3.2: <b>bộ lọc đã lưu</b> (thêm, xóa, đổi tên, có trong file sao lưu), icon Màn hình chính iOS, loại trừ thư mục khi quét.</li>
       <li>Mới ở 3.1: nút <b>Lọc danh sách</b> (Shift+Enter) chỉ hiện các bài khớp tìm kiếm, kèm thanh trạng thái để sửa hoặc bỏ lọc.</li>
       <li>Bài ngẫu nhiên, đảo thứ tự, thanh tiến độ, liên kết trực tiếp tới bài (#p123), nút Back đóng ảnh trên điện thoại.</li>
       <li>Sao lưu bằng file, tự phát video khi lướt tới, thêm theme Dracula / Solarized / Midnight / Sakura.</li>
@@ -1073,7 +1311,7 @@ const baseName=p=>p.slice(p.lastIndexOf('/')+1);
 const urlOf=rel=>BASE+rel.split('/').map(encodeURIComponent).join('/');
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const K=k=>`tumblr_archive_${FINGERPRINT}_${k}`;
-const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3')};
+const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3'),saved:K('saved_filters_v1')};
 const feed=$('feed'),sentinel=$('loadSentinel'),header=$('siteHeader'),toastEl=$('toast');
 document.querySelectorAll('[data-ic]').forEach(el=>el.insertAdjacentHTML('afterbegin',ic(el.dataset.ic)));
 
@@ -1178,10 +1416,15 @@ function measureFeedWidth(){feedWidthCache=Math.min(feed.clientWidth||innerWidth
 /* ---------- Render theo lô + masonry ---------- */
 const isGrid=()=>prefs.view==='grid';
 function calcCols(){if(prefs.cols>0)return clamp(prefs.cols,1,10);const w=feed.clientWidth||innerWidth;return clamp(Math.floor((w+14)/(w<600?170:250)),2,8)}
+/* Bộ lọc thuần túy: dùng cho danh sách chính, đếm số bài của bộ lọc đã lưu. f = {q (đã parse|null), types:Set, folders:Set, liked:bool} */
+function filterPosts(f){
+  const out=[],allFolders=f.folders.size===FOLDER_PATHS.length;let mask=0;f.types.forEach(k=>mask|=1<<k);
+  if(f.q)buildIndex();
+  for(let i=0;i<POSTS.length;i++){const p=POSTS[i];if(!(p.mask&mask))continue;if(!allFolders&&p.f&&!f.folders.has(p.f))continue;if(f.liked&&!liked.has(p.id))continue;if(f.q&&!matchPost(i,f.q))continue;out.push(i)}
+  return out;
+}
 function computeView(){
-  const out=[],allFolders=folderFilter.size===FOLDER_PATHS.length,sq=searchFilter&&searchFilter.q;let mask=0;typeFilter.forEach(k=>mask|=1<<k);
-  if(sq)buildIndex();
-  for(let i=0;i<POSTS.length;i++){const p=POSTS[i];if(!(p.mask&mask))continue;if(!allFolders&&p.f&&!folderFilter.has(p.f))continue;if(onlyLiked&&!liked.has(p.id))continue;if(sq&&!matchPost(i,sq))continue;out.push(i)}
+  const out=filterPosts({q:searchFilter&&searchFilter.q,types:typeFilter,folders:folderFilter,liked:onlyLiked});
   if(prefs.reverse)out.reverse();
   view=out;viewPos.fill(-1);for(let i=0;i<out.length;i++)viewPos[out[i]]=i;
 }
@@ -1193,7 +1436,7 @@ function rebuild(){
   const empty=view.length===0;$('empty').hidden=!empty;sentinel.hidden=empty;
   if(empty)$('emptyMsg').textContent=searchFilter?'Không có bài nào khớp tìm kiếm và bộ lọc hiện tại.':onlyLiked&&!liked.size?'Bạn chưa thích bài nào. Bấm biểu tượng trái tim ở mỗi bài để lưu lại.':POSTS.length?'Không có bài nào khớp bộ lọc hiện tại.':'Không tìm thấy ảnh hoặc video trong thư mục media đã chọn hoặc các thư mục con.';
   $('emptyReset').hidden=!(searchFilter||onlyLiked||typeFilter.size<3||folderFilter.size<FOLDER_PATHS.length);
-  updateSearchChip();
+  updateSearchChip();renderSavedQuick();
   renderMore(grid?colN*6:12);
   fillNearViewport();updateLikeCount();updatePos();
 }
@@ -1550,8 +1793,8 @@ lbStage.addEventListener('pointerup',e=>endPointer(e,false));lbStage.addEventLis
 const backupDlg=$('backupDlg');
 const enc64=t=>{const b=new TextEncoder().encode(t);let s='';for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode(...b.subarray(i,i+0x8000));return btoa(s)};
 const dec64=v=>new TextDecoder().decode(Uint8Array.from(atob(v.replace(/\s+/g,'')),c=>c.charCodeAt(0)));
-function backupData(){return {format:'tumblr-archive-backup',version:3,archiveFingerprint:FINGERPRINT,likedPosts:[...liked],position:readJSON(STORE.position,null),exportedAt:new Date().toISOString()}}
-function openBackup(focusImport){closeSettings();$('backupStat').textContent=`Hiện có ${liked.size} bài đã thích${readJSON(STORE.position,null)?' và một vị trí đọc đã lưu':''}.`;backupDlg.classList.add('active');if(focusImport)requestAnimationFrame(()=>$('impText').focus())}
+function backupData(){return {format:'tumblr-archive-backup',version:3,archiveFingerprint:FINGERPRINT,likedPosts:[...liked],savedFilters:savedFilters.map(({id,...rest})=>rest),position:readJSON(STORE.position,null),exportedAt:new Date().toISOString()}}
+function openBackup(focusImport){closeSettings();$('backupStat').textContent=`Hiện có ${liked.size} bài đã thích, ${savedFilters.length} bộ lọc đã lưu${readJSON(STORE.position,null)?' và một vị trí đọc đã lưu':''}.`;backupDlg.classList.add('active');if(focusImport)requestAnimationFrame(()=>$('impText').focus())}
 function closeBackup(){backupDlg.classList.remove('active')}
 $('expFile').onclick=()=>{const blob=new Blob([JSON.stringify(backupData(),null,1)],{type:'application/json'}),a=document.createElement('a'),d=new Date(),p=n=>String(n).padStart(2,'0');a.href=URL.createObjectURL(blob);a.download=`archive-backup-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}.json`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);toast('Đã tạo file backup')};
 $('expCopy').onclick=async()=>{const ok=await copyText(enc64(JSON.stringify(backupData())));toast(ok?'Đã sao chép chuỗi backup':'Không sao chép được — hãy dùng nút Tải file')};
@@ -1562,11 +1805,20 @@ function importBackup(text){
     if(!data||data.format!=='tumblr-archive-backup'||!Array.isArray(data.likedPosts)||data.likedPosts.some(x=>typeof x!=='string'))throw Error('bad');
     let added=0;for(const id of data.likedPosts)if(ID_INDEX.has(id)&&!liked.has(id)){liked.add(id);added++}
     save(STORE.likes,[...liked]);
+    let addedF=0;
+    if(Array.isArray(data.savedFilters)){
+      for(const f of cleanSaved(data.savedFilters)){
+        if(savedFilters.length>=MAX_SAVED)break;
+        if(savedFilters.some(x=>sameName(x.name,f.name)))continue;
+        f.id=newFilterId();savedFilters.push(f);addedF++;
+      }
+      if(addedF)persistSaved();
+    }
     let pos=data.position;if(!pos&&data.lastPostId)pos={id:data.lastPostId,index:Number(data.lastPostIdx)-1};
     const idx=pos?(ID_INDEX.has(pos.id)?ID_INDEX.get(pos.id):Number(pos.index)):-1;
     computeView();rebuild();closeBackup();
     if(Number.isInteger(idx)&&idx>=0&&idx<POSTS.length&&viewPos[idx]>=0)gotoPost(idx,{block:'center'});
-    toast(`Đã khôi phục: thêm ${added} bài đã thích (tổng ${liked.size})`);
+    toast(`Đã khôi phục: thêm ${added} bài đã thích (tổng ${liked.size})${addedF?`, ${addedF} bộ lọc`:''}`);
   }catch(err){toast(err.message==='big'?'Dữ liệu backup quá lớn':'Backup không hợp lệ')}
 }
 $('impGo').onclick=()=>importBackup($('impText').value);
@@ -1583,8 +1835,9 @@ document.addEventListener('keydown',e=>{
   if(e.ctrlKey||e.metaKey||e.altKey)return;const k=e.key;
   if(searchDlg.classList.contains('active')){if(k==='Escape'){closeSearch();e.preventDefault()}return}
   if(backupDlg.classList.contains('active')){if(k==='Escape'){closeBackup();e.preventDefault()}return}
+  if(savedDlg.classList.contains('active')){if(k==='Escape'){closeSaved();e.preventDefault()}return}
   const tag=document.activeElement&&document.activeElement.tagName;
-  if(['INPUT','TEXTAREA','SELECT'].includes(tag)||document.activeElement.isContentEditable){if(k==='Escape')document.activeElement.blur();return}
+  if(['INPUT','TEXTAREA','SELECT'].includes(tag)||document.activeElement.isContentEditable){if(k==='Escape'){document.activeElement.blur();closeFilter();closeSettings()}return}
   if(lb.open){
     const onVideo=tag==='VIDEO';
     if(k==='Escape'){if(lb.info){toggleInfo()}else closeLightbox();e.preventDefault()}
@@ -1613,11 +1866,125 @@ document.addEventListener('keydown',e=>{
   else if(k==='r'||k==='R')randomPost();
   else if(k==='v'||k==='V')setView(isGrid()?'feed':'grid');
   else if(k==='m'||k==='M'){e.preventDefault();openThemeSettings()}
+  else if(k==='b'||k==='B'){e.preventDefault();openSaved()}
   else if(k==='e'||k==='E'){e.preventDefault();openBackup()}
   else if(k==='i'||k==='I'){e.preventDefault();openBackup(true)}
   else if(k==='t'||k==='T')scrollTo({top:0,behavior:'smooth'});
   else if(k==='?'||k==='h'||k==='H')toggleHelp();
 });
+
+/* ---------- Bộ lọc đã lưu ---------- */
+const savedDlg=$('savedDlg'),MAX_SAVED=40;
+const newFilterId=()=>'f'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+function cleanSaved(arr){
+  if(!Array.isArray(arr))return [];const out=[],seen=new Set();
+  for(const x of arr){
+    if(!x||typeof x.name!=='string')continue;const name=x.name.trim().slice(0,60),key=name.toLocaleLowerCase();
+    if(!name||seen.has(key))continue;seen.add(key);
+    out.push({id:typeof x.id==='string'&&x.id?x.id:newFilterId(),name,q:typeof x.q==='string'?x.q.slice(0,180):'',
+      types:Array.isArray(x.types)?x.types.filter(k=>k===0||k===1||k===2):null,
+      folders:Array.isArray(x.folders)?x.folders.filter(f=>typeof f==='string'):null,liked:!!x.liked,at:Number(x.at)||0});
+    if(out.length>=MAX_SAVED)break;
+  }
+  return out;
+}
+let savedFilters=cleanSaved(readJSON(STORE.saved,[])),renamingId=null;
+const persistSaved=()=>save(STORE.saved,savedFilters);
+const sameName=(a,b)=>a.trim().toLocaleLowerCase()===b.trim().toLocaleLowerCase();
+function currentSpec(){
+  const active=!!searchFilter||onlyLiked||typeFilter.size<3||folderFilter.size<FOLDER_PATHS.length;
+  if(!active)return null;
+  return {q:searchFilter?searchFilter.raw:'',types:typeFilter.size<3?[...typeFilter].sort():null,folders:folderFilter.size<FOLDER_PATHS.length?[...folderFilter].sort():null,liked:onlyLiked};
+}
+const specKey=f=>JSON.stringify([f.q||'',f.types?[...f.types].sort():null,f.folders?[...f.folders].sort():null,!!f.liked]);
+function describeSpec(f){
+  const parts=[];
+  if(f.q)parts.push('“'+f.q+'”');
+  if(f.types)parts.push(f.types.length?f.types.map(k=>['Ảnh','GIF','Video'][k]).join(' + '):'Không loại nào');
+  if(f.folders)parts.push(f.folders.length&&f.folders.length<=2?f.folders.join(', '):f.folders.length+'/'+FOLDER_PATHS.length+' thư mục');
+  if(f.liked)parts.push('Đã thích');
+  return parts.join(' · ')||'Không có điều kiện';
+}
+function specPosts(f){
+  return filterPosts({q:f.q?parseQuery(f.q):null,types:new Set(f.types||[0,1,2]),
+    folders:f.folders?new Set(f.folders.filter(x=>FOLDER_COUNT.has(x))):new Set(FOLDER_PATHS),liked:!!f.liked});
+}
+function applySpec(f){
+  const wasLiked=onlyLiked;
+  searchFilter=f.q?{raw:f.q,q:parseQuery(f.q)}:null;
+  typeFilter=new Set(f.types||[0,1,2]);
+  const known=f.folders?f.folders.filter(x=>FOLDER_COUNT.has(x)):null;
+  folderFilter=known&&known.length?new Set(known):new Set(FOLDER_PATHS);
+  onlyLiked=!!f.liked;if(onlyLiked&&!wasLiked)likedReturn=focusIdx;if(!onlyLiked)likedReturn=null;
+  syncFilterUI();computeView();if(view.length)focusIdx=view[0];rebuild();window.scrollTo(0,0);
+  return !!(f.folders&&f.folders.length&&known.length<f.folders.length);
+}
+function applySaved(s){
+  const missing=applySpec(s);closeSaved();closeFilter();
+  toast(`Đã áp dụng “${s.name}” · ${view.length} bài${missing?' (một số thư mục đã không còn)':''}`);
+}
+function suggestName(f){const d=describeSpec(f);return d.length>48?d.slice(0,47)+'…':d}
+function renderSavedQuick(){
+  const box=$('savedQuick');if(!box)return;box.replaceChildren();
+  const cur=currentSpec(),curKey=cur?specKey(cur):null;
+  for(const s of savedFilters.slice(0,8)){
+    const b=document.createElement('button');b.type='button';b.className='item'+(specKey(s)===curKey?' on':'');b.dataset.id=s.id;b.title=describeSpec(s);
+    b.innerHTML=ic('bookmark');const t=document.createElement('span');t.className='item-text';t.textContent=s.name;b.append(t);box.append(b);
+  }
+}
+$('savedQuick').addEventListener('click',e=>{const b=e.target.closest('.item');const s=b&&savedFilters.find(x=>x.id===b.dataset.id);if(s)applySaved(s)});
+function renderSaved(){
+  const cur=currentSpec(),curKey=cur?specKey(cur):null,name=$('savedName');
+  $('savedCurrent').textContent=cur?'Bộ lọc hiện tại: '+describeSpec(cur):'Chưa bật bộ lọc nào. Hãy dùng Lọc, Đã thích hoặc “Lọc danh sách” trong hộp tìm kiếm, rồi quay lại đây để lưu.';
+  name.disabled=!cur;$('savedSave').disabled=!cur;name.placeholder=cur?suggestName(cur):'Tên bộ lọc';
+  const list=$('savedList');list.replaceChildren();
+  if(!savedFilters.length){const d=document.createElement('div');d.className='saved-empty';d.textContent='Chưa có bộ lọc nào được lưu.';list.append(d);return}
+  let focusInput=null;
+  for(const s of savedFilters){
+    const row=document.createElement('div');row.className='saved-item'+(specKey(s)===curKey?' on':'');row.dataset.id=s.id;
+    if(renamingId===s.id){
+      const inp=document.createElement('input');inp.type='text';inp.maxLength=60;inp.value=s.name;inp.className='rename-input';inp.setAttribute('aria-label','Tên mới của bộ lọc');
+      inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();commitRename(s,inp.value)}else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();renamingId=null;renderSaved()}});
+      row.append(inp,iconBtn('check','rename-ok','Lưu tên'),iconBtn('x','rename-cancel','Hủy'));focusInput=inp;
+    }else{
+      const a=document.createElement('button');a.type='button';a.className='saved-apply';a.dataset.act='apply';
+      const b=document.createElement('b');b.textContent=s.name;const sm=document.createElement('small');
+      const dd=document.createElement('span');dd.className='desc';dd.textContent=describeSpec(s);const cc=document.createElement('span');cc.className='cnt';cc.textContent=` · ${specPosts(s).length} bài`;
+      sm.append(dd,cc);a.append(b,sm);
+      row.append(a,iconBtn('pencil','rename','Đổi tên'),iconBtn('trash','del','Xóa','danger'));
+    }
+    list.append(row);
+  }
+  if(focusInput)requestAnimationFrame(()=>{focusInput.focus();focusInput.select()});
+}
+function iconBtn(icon,act,label,extra){const b=document.createElement('button');b.type='button';b.className='icon-btn'+(extra?' '+extra:'');b.dataset.act=act;b.title=label;b.setAttribute('aria-label',label);b.innerHTML=ic(icon);return b}
+function commitRename(s,val){
+  const name=val.trim().slice(0,60);
+  if(!name){toast('Tên bộ lọc không được để trống');return}
+  if(savedFilters.some(x=>x!==s&&sameName(x.name,name))){toast('Đã có bộ lọc trùng tên');return}
+  s.name=name;persistSaved();renamingId=null;renderSaved();renderSavedQuick();toast(`Đã đổi tên thành “${name}”`);
+}
+function saveCurrent(){
+  const cur=currentSpec();if(!cur){toast('Chưa có bộ lọc nào đang bật để lưu');return}
+  const name=($('savedName').value.trim()||suggestName(cur)).slice(0,60),existing=savedFilters.find(x=>sameName(x.name,name));
+  if(existing){Object.assign(existing,cur,{at:Date.now()});toast(`Đã cập nhật bộ lọc “${existing.name}”`)}
+  else{if(savedFilters.length>=MAX_SAVED){toast(`Tối đa ${MAX_SAVED} bộ lọc — hãy xóa bớt trước khi lưu thêm`);return}savedFilters.push({id:newFilterId(),name,...cur,at:Date.now()});toast(`Đã lưu bộ lọc “${name}”`)}
+  persistSaved();$('savedName').value='';renderSaved();renderSavedQuick();
+}
+$('savedList').addEventListener('click',e=>{
+  const btn=e.target.closest('[data-act]'),row=e.target.closest('.saved-item');if(!btn||!row)return;
+  const s=savedFilters.find(x=>x.id===row.dataset.id);if(!s)return;const act=btn.dataset.act;
+  if(act==='apply')applySaved(s);
+  else if(act==='rename'){renamingId=s.id;renderSaved()}
+  else if(act==='rename-ok')commitRename(s,row.querySelector('input').value);
+  else if(act==='rename-cancel'){renamingId=null;renderSaved()}
+  else if(act==='del'&&confirm(`Xóa bộ lọc “${s.name}”?`)){savedFilters=savedFilters.filter(x=>x!==s);persistSaved();renderSaved();renderSavedQuick();toast(`Đã xóa bộ lọc “${s.name}”`)}
+});
+function openSaved(){closeSettings();closeFilter();renamingId=null;renderSaved();savedDlg.classList.add('active');requestAnimationFrame(()=>{const n=$('savedName');if(!n.disabled)n.focus()})}
+function closeSaved(){savedDlg.classList.remove('active');renamingId=null}
+$('savedName').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();saveCurrent()}});
+$('savedSave').onclick=saveCurrent;$('savedClose').onclick=closeSaved;$('savedManage').onclick=openSaved;$('chipSave').onclick=openSaved;
+savedDlg.addEventListener('click',e=>{if(e.target===savedDlg)closeSaved()});
 
 /* Dán liên kết #p123 vào tab đang mở (chỉ đổi hash, không tải lại trang) */
 addEventListener('hashchange',()=>{
@@ -1665,6 +2032,10 @@ class Options(NamedTuple):
     feed_width: int
     probe_dimensions: bool
     video_autoplay: bool
+    ignored_folders: tuple
+    app_icon: str
+    app_name: str
+    app_status_bar: str
 
 
 def render_sprite() -> str:
@@ -1679,7 +2050,8 @@ def relative_media_root(folder: Path, output_dir: Path) -> str:
 def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache: SizeCache, log) -> tuple[list[dict], dict]:
     output_dir = output.parent.resolve()
     t0 = time.perf_counter()
-    scans = [(folder, *scan_folder(folder)) for folder in images_dirs]
+    ignore = IgnoreRules(opts.ignored_folders)
+    scans = [(folder, *scan_folder(folder, ignore)) for folder in images_dirs]
     t_scan = time.perf_counter() - t0
 
     sizes: dict[str, tuple[int, int]] = {}
@@ -1746,7 +2118,7 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
         entries.sort(key=lambda e: (e["created"], e["nk_name"], e["nk_folder"]))
     else:
         entries.sort(key=lambda e: (e["created"], e["nk_name"], e["nk_folder"]), reverse=True)
-    stats = {"scan": t_scan, "probe": t_probe, "media": sum(len(e["names"]) for e in entries),
+    stats = {"scan": t_scan, "probe": t_probe, "skipped_dirs": ignore.skipped, "media": sum(len(e["names"]) for e in entries),
              "unknown_dims": sum(1 for e in entries for m in e["post"]["m"] if not m[1] and media_kind(m[0]) != KIND_VIDEO)}
     return entries, stats
 
@@ -1756,12 +2128,13 @@ HTML_HEAD = """<!doctype html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="__COLOR_SCHEME__"><meta name="theme-color" content="__THEME_COLOR__"><meta name="generator" content="build_archive.py v__VERSION__">
+__APP_META__
 <title>__ARCHIVE_TITLE__</title>__FAVICON_LINK__
 <style>
 """
 
 
-def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_dir: Path, log=print) -> tuple[int, dict]:
+def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_dir: Path, log=print, icon_base: Path | None = None) -> tuple[int, dict]:
     if not images_dirs:
         raise FileNotFoundError("Chưa cấu hình thư mục media nào.")
     for folder in images_dirs:
@@ -1779,6 +2152,25 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
     theme = THEMES[opts.theme_dark if opts.theme == "auto" else opts.theme]
     theme_vars = ";".join(f"--{key}:{value}" for key, value in theme.items() if key != "scheme")
     auto_themes = {"light": opts.theme_light, "dark": opts.theme_dark}
+    # --- Icon ứng dụng cho "Thêm vào Màn hình chính" (iOS) ---
+    icon_dir = icon_base or script_dir
+    if opts.app_icon:
+        icon_path = Path(opts.app_icon).expanduser()
+        icon_path = icon_path if icon_path.is_absolute() else icon_dir / icon_path
+    else:
+        icon_path = next((c for d in dict.fromkeys([icon_dir, script_dir]) for name in APP_ICON_CANDIDATES
+                          if (c := d / name).is_file()), None)
+    icon_png, icon_kind = prepare_app_icon(icon_path, theme, cache, lambda msg: print("Cảnh báo: " + msg, file=sys.stderr))
+    cache.save([str(folder) for folder in images_dirs])
+    icon_uri = "data:image/png;base64," + base64.b64encode(icon_png).decode("ascii")
+    icon_w, icon_h = struct.unpack(">II", icon_png[16:24])
+    app_name = html_escape((opts.app_name or opts.title).strip()[:40], quote=True)
+    app_meta = (f'<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
+                f'<meta name="apple-mobile-web-app-title" content="{app_name}">'
+                f'<meta name="apple-mobile-web-app-status-bar-style" content="{opts.app_status_bar}">'
+                f'<meta name="format-detection" content="telephone=no">'
+                f'<link rel="apple-touch-icon" sizes="{icon_w}x{icon_h}" href="{icon_uri}">')
+    stats["icon"] = icon_kind
     favicon_link = ""
     favicon = next((c for folder in [script_dir, *images_dirs]
                     for c in (folder / "fav.icon", folder / "favicon.ico", folder / "favicon.png", folder / "favicon.svg")
@@ -1786,6 +2178,8 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
     if favicon:
         mime = {".ico": "image/x-icon", ".icon": "image/x-icon", ".png": "image/png", ".svg": "image/svg+xml"}.get(favicon.suffix.casefold(), "application/octet-stream")
         favicon_link = f'<link rel="icon" href="data:{mime};base64,{base64.b64encode(favicon.read_bytes()).decode("ascii")}">'
+    else:
+        favicon_link = f'<link rel="icon" type="image/png" href="{icon_uri}">'
     theme_options = "".join(f'<option value="{key}">{html_escape(THEME_LABELS.get(key, key))}</option>' for key in THEMES)
     flags = {"filename": opts.show_filename, "created": opts.show_created_time, "size": opts.show_file_size,
              "thumbs": opts.show_video_thumbnails, "dims": opts.show_dimensions}
@@ -1798,7 +2192,7 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
         "AUTO_THEMES": js_json(auto_themes), "FLAGS": js_json(flags), "DEFAULTS": js_json(defaults),
         "COLOR_SCHEME": theme["scheme"], "THEME_COLOR": theme["mantle"], "FAVICON_LINK": favicon_link,
         "HEADER_STICKY_CLASS": "" if opts.sticky_header else "header-not-sticky", "TOTAL_POSTS": str(len(posts)),
-        "VERSION": VERSION, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
+        "VERSION": VERSION, "APP_META": app_meta, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
     }
     # Thay một lượt: dữ liệu người dùng (tên file, ghi chú) không bao giờ bị quét lại tìm placeholder.
     html = re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), m.group(0)), HTML_HEAD + CSS + BODY)
@@ -1812,6 +2206,17 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def ignore_patterns(args, config: dict) -> tuple:
+    """Gộp ignored_folders trong config.toml với --ignore trên dòng lệnh."""
+    configured = config.get("ignored_folders") or []
+    if isinstance(configured, str):
+        configured = [configured]
+    if not isinstance(configured, list) or not all(isinstance(v, str) for v in configured):
+        raise ValueError('ignored_folders phải là danh sách chuỗi, ví dụ ["Thumbs", "_old*", "Anime/2023"]')
+    extra = list(getattr(args, "ignore", None) or [])
+    return tuple(dict.fromkeys(v.strip() for v in [*configured, *extra] if v.strip()))
+
+
 def resolve_folders(args, config: dict, config_path: Path | None, script_dir: Path) -> list[Path]:
     if args.images is not None:
         return [args.images if args.images.is_absolute() else Path.cwd() / args.images]
@@ -1825,10 +2230,12 @@ def resolve_folders(args, config: dict, config_path: Path | None, script_dir: Pa
     if configured:
         base_dir = config_path.parent if config_path else script_dir
         if len(configured) == 1 and str(configured[0]).strip().casefold() == "all":
+            rules = IgnoreRules(ignore_patterns(args, config))
             candidates = sorted((item for item in base_dir.iterdir()
-                                 if item.is_dir() and not item.name.startswith(".") and item.name not in IGNORED_MEDIA_DIRS),
+                                 if item.is_dir() and not item.name.startswith(".") and item.name not in IGNORED_MEDIA_DIRS
+                                 and not rules.matches(item.name, item.name, str(item))),
                                 key=lambda item: natural_key(item.name))
-            return [c for c in candidates if folder_has_media(c)]
+            return [c for c in candidates if folder_has_media(c, IgnoreRules(ignore_patterns(args, config)))]
         return [Path(str(v)) if Path(str(v)).is_absolute() else base_dir / str(v) for v in configured]
     candidates = [script_dir / "Images", script_dir / "images", Path.cwd() / "Images", Path.cwd() / "images"]
     return [next((c for c in candidates if c.is_dir()), candidates[0])]
@@ -1863,6 +2270,9 @@ def build_options(args, config: dict) -> Options:
     sort_by = {"date": "created", "created_at": "created", "newest": "created_desc", "latest": "created_desc"}.get(sort_by, sort_by)
     if sort_by not in ("name", "created", "created_desc"):
         raise ValueError("sort_by phải là name, created hoặc created_desc")
+    status_bar = str(config.get("app_status_bar") or "black-translucent").strip().casefold()
+    if status_bar not in STATUS_BAR_STYLES:
+        raise ValueError(f"app_status_bar phải là một trong: {', '.join(STATUS_BAR_STYLES)}")
     view = str(config.get("default_view", "feed")).strip().casefold()
     view = {"list": "feed", "timeline": "feed", "masonry": "grid", "gallery": "grid"}.get(view, view)
     if view not in ("feed", "grid"):
@@ -1875,13 +2285,16 @@ def build_options(args, config: dict) -> Options:
         folder_filter_depth=integer("folder_filter_depth", 0, 10), default_view=view, columns=integer("columns", 0, 10),
         feed_width=integer("feed_width", 480, 1100), probe_dimensions=truthy("probe_dimensions", True) and not args.no_probe,
         video_autoplay=truthy("video_autoplay"),
+        ignored_folders=ignore_patterns(args, config),
+        app_icon=str(args.icon.resolve()) if getattr(args, "icon", None) else str(config.get("app_icon") or ""),
+        app_name=str(config.get("app_name") or ""), app_status_bar=status_bar,
     )
 
 
-def folder_signature(folders: list[Path]) -> tuple:
+def folder_signature(folders: list[Path], patterns: tuple = ()) -> tuple:
     parts = []
     for folder in folders:
-        media, notes = scan_folder(folder)
+        media, notes = scan_folder(folder, IgnoreRules(patterns))
         parts.append((str(folder), tuple((m.rel, m.size, m.mtime_ns) for m in media), tuple(sorted((k, v.stat().st_mtime_ns) for k, v in notes.items() if v.exists()))))
     return tuple(parts)
 
@@ -1894,11 +2307,13 @@ def run_build(args, script_dir: Path) -> tuple[int, Path, Options, list[Path]]:
     folders = resolve_folders(args, config, config_path, script_dir)
     output = args.output if args.output is not None else script_dir / "index.html"
     started = time.perf_counter()
-    count, stats = generate_html(folders, output, opts, script_dir)
+    count, stats = generate_html(folders, output, opts, script_dir, icon_base=config_path.parent if config_path else None)
     elapsed = time.perf_counter() - started
     if not args.quiet:
         print(f"Đã tạo {output} · {count} bài · {stats['media']} media · {stats['bytes'] / 1024:.0f} KB · "
               f"theme {opts.theme} · sort {opts.sort_by} · {elapsed:.2f}s (quét {stats['scan']:.2f}s, đọc kích thước {stats['probe']:.2f}s)")
+        if stats["skipped_dirs"]:
+            print(f"Đã bỏ qua {stats['skipped_dirs']} thư mục theo ignored_folders / --ignore.")
         if stats["unknown_dims"]:
             print(f"Lưu ý: {stats['unknown_dims']} ảnh không đọc được kích thước (định dạng lạ hoặc file hỏng); trang vẫn hoạt động nhưng các ảnh này có thể làm nhảy layout nhẹ.")
     return count, output, opts, folders
@@ -1912,6 +2327,8 @@ def main() -> int:
     parser.add_argument("--title", default=None, help="Ghi đè tên archive trong config.toml")
     parser.add_argument("--theme", default=None, help="Ghi đè theme trong config.toml (auto hoặc: " + ", ".join(THEMES) + ")")
     parser.add_argument("--sort-by", default=None, choices=("name", "created", "created_desc"), help="Sắp xếp theo tên, ngày tạo tăng dần hoặc mới nhất trước")
+    parser.add_argument("--ignore", action="append", default=[], metavar="MẪU", help="Bỏ qua thư mục khớp mẫu (lặp lại được; gộp với ignored_folders). Ví dụ: --ignore Thumbs --ignore \"Anime/2023\"")
+    parser.add_argument("--icon", type=Path, default=None, help="File PNG dùng làm icon Màn hình chính iOS (ghi đè app_icon)")
     parser.add_argument("--no-probe", action="store_true", help="Bỏ qua bước đọc kích thước ảnh (build nhanh hơn, nhưng trang có thể nhảy layout khi ảnh tải)")
     parser.add_argument("--clear-cache", action="store_true", help="Xóa cache kích thước ảnh rồi build lại")
     parser.add_argument("--open", action="store_true", help="Mở archive trong trình duyệt sau khi build")
@@ -1934,11 +2351,11 @@ def main() -> int:
         webbrowser.open(output.resolve().as_uri())
     if args.watch:
         print("Đang theo dõi thay đổi… (Ctrl+C để dừng)")
-        signature = folder_signature(folders)
+        signature = folder_signature(folders, _opts.ignored_folders)
         try:
             while True:
                 time.sleep(2.0)
-                current = folder_signature(folders)
+                current = folder_signature(folders, _opts.ignored_folders)
                 if current != signature:
                     signature = current
                     try:
