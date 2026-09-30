@@ -1,8 +1,8 @@
-# Tumblr-style Media Archive (build_archive.py v3.0)
+# Tumblr-style Media Archive (build_archive.py v3.1)
 
 Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bài đã thích, sao lưu…
 
-Không cần cài thêm gì: chỉ cần **Python 3.8+** (không phụ thuộc thư viện ngoài).
+Không cần cài thêm gì: chỉ cần **Python 3.11 trở lên** (đọc cấu hình bằng `tomllib` có sẵn trong thư viện chuẩn, không phụ thuộc thư viện ngoài). Chạy bằng Python cũ hơn, script sẽ báo lỗi rõ ràng và dừng.
 
 ---
 
@@ -11,7 +11,7 @@ Không cần cài thêm gì: chỉ cần **Python 3.8+** (không phụ thuộc t
 ```
 📁 Archive/
 ├── build_archive.py
-├── config.yml
+├── config.toml
 └── Images/            ← bỏ ảnh, video (và file .md ghi chú) vào đây
 ```
 
@@ -26,7 +26,7 @@ Mở `index.html` bằng bất kỳ trình duyệt hiện đại nào (Chrome, E
 
 ---
 
-## 2. Cấu hình (`config.yml`)
+## 2. Cấu hình (`config.toml`)
 
 Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 
@@ -50,18 +50,30 @@ Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 
 **Theme có sẵn:** `mocha`, `frappe`, `macchiato`, `latte`, `nord`, `tokyo-night`, `gruvbox`, `rose-pine`, `noir-velvet`, `oxblood`, `nord-light`, `tokyo-night-light`, `gruvbox-light`, `rose-pine-dawn`, `dracula`, `solarized-dark`, `solarized-light`, `midnight` (đen AMOLED), `sakura`.
 
-Tên khóa cũ của v2 (`name`, `image_dir`, `folders`, `sort`, `layout`…) vẫn được nhận.
+**Cú pháp TOML cần nhớ:**
+
+```toml
+title = "My Archive"        # chữ: đặt trong dấu ngoặc kép
+sticky_header = true        # đúng/sai: viết thường, KHÔNG ngoặc kép
+feed_width = 720            # số: viết trần, KHÔNG ngoặc kép
+images_dir = "D:/Pictures"  # Windows: dùng dấu / hoặc nháy đơn 'D:\Pictures'
+```
+
+Nếu sai kiểu (ví dụ `columns = "3"`) hoặc file hỏng cú pháp, script báo lỗi kèm tên khóa/dòng và không build. Khóa không nhận ra chỉ bị cảnh báo và bỏ qua. Tên khóa cũ của v2 (`name`, `image_dir`, `folders`, `sort`, `layout`…) vẫn được nhận.
+
+> **Chuyển từ `config.yml`:** phiên bản này **không còn đọc `config.yml`**. Nếu chỉ còn `config.yml`, script dừng và nhắc bạn chuyển đổi. Cách chuyển: đổi `khóa: giá trị` thành `khóa = giá trị`, đặt chữ trong ngoặc kép, đổi danh sách `images_dirs` thành mảng `[ "A", "B" ]` (xem file mẫu).
 
 ### Nhiều thư mục
 
 ```yaml
-images_dirs:
-  - Images
-  - D:/Pictures/Tumblr
-  - ../Backup/Memes
+images_dirs = [
+  "Images",
+  "D:/Pictures/Tumblr",
+  "../Backup/Memes",
+]
 ```
 
-Có từ 2 thư mục trở lên, mỗi bài hiện nhãn thư mục nguồn và menu **Lọc** có thêm mục chọn thư mục. `images_dirs: [all]` dùng mọi thư mục con (có chứa media) cạnh `config.yml`.
+Có từ 2 thư mục trở lên, mỗi bài hiện nhãn thư mục nguồn và menu **Lọc** có thêm mục chọn thư mục. `images_dirs = ["all"]` dùng mọi thư mục con (có chứa media) cạnh `config.toml`.
 
 ---
 
@@ -70,7 +82,7 @@ Có từ 2 thư mục trở lên, mỗi bài hiện nhãn thư mục nguồn và
 ```
 python build_archive.py [tùy chọn]
 
-  --images THƯ_MỤC     Dùng một thư mục media này, bỏ qua config.yml
+  --images THƯ_MỤC     Dùng một thư mục media này, bỏ qua config.toml
   --output FILE        File HTML đầu ra (mặc định: index.html cạnh script)
   --title TÊN          Ghi đè tên archive
   --theme TÊN          Ghi đè theme
@@ -136,6 +148,8 @@ Hỗ trợ: tiêu đề `#`, **đậm**, *nghiêng*, ~~gạch~~, `code`, liên k
 | `J` / `↓` · `K` / `↑` | Bài tiếp / bài trước |
 | `Space` / `Shift+Space` | Bài tiếp / bài trước |
 | `G` | Tìm và nhảy tới bài |
+| `Shift+Enter` (trong hộp tìm) | Chỉ hiện các bài khớp tìm kiếm (lọc danh sách) |
+| `Esc` | Bỏ lọc tìm kiếm đang bật |
 | `R` | Bài ngẫu nhiên |
 | `L` | Thích / bỏ thích bài đang xem |
 | `F` | Chỉ hiện bài đã thích |
@@ -170,7 +184,18 @@ Gõ số thứ tự (`300` hoặc `#300`), tên file, tên thư mục hoặc n�
 | `is:liked` | Bài đã thích |
 | `is:note` | Bài có ghi chú `.md` |
 
-Ví dụ: `is:multi cute` · `is:video is:liked`. Dùng `↑` `↓` chọn kết quả, `Enter` để mở.
+Ví dụ: `is:multi cute` · `is:video is:liked`. Dùng `↑` `↓` chọn kết quả, `Enter` để nhảy tới bài.
+
+### Lọc danh sách theo tìm kiếm (mới ở 3.1)
+
+Muốn **xem cả tập ảnh khớp** thay vì nhảy từng bài: nhập nội dung tìm rồi bấm **Lọc danh sách (N)** hoặc nhấn `Shift+Enter`. Trang chỉ còn hiện N bài khớp, ở cả chế độ danh sách lẫn lưới, và trình xem ảnh phóng to cũng chỉ duyệt trong tập này.
+
+- Một thanh trạng thái dưới tiêu đề hiện nội dung đang lọc và số bài. Bấm vào chữ để sửa, bấm **✕** hoặc nhấn `Esc` để bỏ lọc (trang giữ nguyên bài bạn đang xem nếu bài đó có trong danh sách đầy đủ).
+- Dùng được mọi cú pháp của tìm kiếm: từ khóa, số bài, `is:video`, `is:gif`, `is:multi`, `is:liked`, `is:note`.
+- Kết hợp được với bộ lọc **Lọc** (loại media, thư mục), **Đã thích** và **Đảo thứ tự**; các điều kiện cùng áp dụng.
+- Mở hộp tìm khi đang lọc, nội dung lọc hiện sẵn để chỉnh; xóa trống rồi bấm **Bỏ lọc** cũng tắt được.
+- Từ khóa không khớp bài nào thì không áp dụng (báo bằng thông báo, giữ nguyên lọc cũ). Chọn nhảy tới một bài nằm ngoài tập đang lọc sẽ tự bỏ lọc để mở bài đó.
+- Bộ lọc chỉ tồn tại trong phiên xem, không lưu; tải lại trang thì trở về danh sách đầy đủ.
 
 ### Liên kết tới bài
 
@@ -203,17 +228,25 @@ Bài đã thích, vị trí đang đọc, theme và tùy chọn giao diện đư
 
 | Hiện tượng | Cách xử lý |
 |---|---|
-| "Không tìm thấy thư mục media" | Kiểm tra `images_dir` trong `config.yml` (đường dẫn tính từ vị trí `config.yml`). |
+| "Không tìm thấy thư mục media" | Kiểm tra `images_dir` trong `config.toml` (đường dẫn tính từ vị trí `config.toml`). |
 | Ảnh không hiện / khung xám | `index.html` bị chuyển đi nơi khác, hoặc định dạng trình duyệt không hỗ trợ (HEIC, JXL). Build lại tại chỗ, hoặc chuyển ảnh sang JPG/WEBP. |
 | Video không phát | Codec không được hỗ trợ (ví dụ HEVC trên một số trình duyệt). Dùng MP4 H.264 hoặc WEBM. |
 | Cảnh báo "ảnh không đọc được kích thước" | File lạ hoặc hỏng. Trang vẫn chạy, chỉ có thể nhảy layout nhẹ ở các ảnh đó. |
 | Mất bài đã thích sau khi đổi thư mục | Xem mục 6: sao lưu trước khi đổi, sau đó khôi phục. |
-| Build lỗi "config.yml dòng N" | Sai cú pháp dòng đó. Chỉ hỗ trợ dạng `khóa: giá trị` và danh sách `images_dirs` với dấu `-`. |
+| Build lỗi liên quan `config.toml` | Sai cú pháp TOML (thiếu ngoặc kép quanh chữ, hoặc số/đúng-sai bị đặt trong ngoặc kép). Thông báo lỗi nêu rõ khóa hoặc dòng. |
+| "chỉ đọc config.toml" | Bạn còn `config.yml` cũ. Chuyển sang `config.toml` như hướng dẫn ở mục 2. |
+| "cần Python 3.11 trở lên" | Cập nhật Python (`python --version` để kiểm tra). |
 | Muốn build lại từ đầu | `python build_archive.py --clear-cache`. |
 
 ---
 
-## 9. Có gì mới so với v2
+## 9. Có gì mới
+
+### 3.1
+- **Cấu hình chuyển sang `config.toml`** (yêu cầu Python 3.11+), bỏ hỗ trợ `config.yml`. Kiểm tra kiểu giá trị chặt hơn, báo khóa lạ, báo lỗi rõ ràng.
+- **Lọc danh sách theo nội dung tìm kiếm**, kèm thanh trạng thái sửa/bỏ lọc.
+
+### 3.0 (so với v2)
 
 - **Nhanh hơn:** quét thư mục một lượt, đọc kích thước ảnh song song và có cache, nhóm bài tối ưu; HTML nhẹ hơn ~45%; ít RAM hơn, tải trang nhanh hơn.
 - **Không nhảy layout:** ảnh có kích thước sẵn, `content-visibility` cho bài ngoài màn hình.

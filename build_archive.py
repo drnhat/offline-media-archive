@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.0).
+"""Tumblr-style offline media archive builder (v3.1).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
-MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.yml cạnh script.
+MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
 
 Điểm mới so với v2: đọc kích thước ảnh lúc build (có cache) để trang không bị
 nhảy layout, masonry thật, lightbox có zoom/pan, tìm kiếm nhanh hơn, sao lưu
 bằng file... Xem `python build_archive.py --help`.
 """
 from __future__ import annotations
+
+import sys
+
+if sys.version_info < (3, 11):
+    sys.exit(f"build_archive.py cần Python 3.11 trở lên (đang chạy Python {sys.version.split()[0]}).")
 
 import argparse
 import base64
@@ -18,8 +23,8 @@ import os
 import posixpath
 import re
 import struct
-import sys
 import time
+import tomllib
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from html import escape as html_escape
@@ -27,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.0"
+VERSION = "3.1"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -539,102 +544,55 @@ def markdown_to_html(source: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Cấu hình (config.yml đơn giản, không cần PyYAML)
+# Cấu hình (config.toml — đọc bằng tomllib có sẵn từ Python 3.11)
 # --------------------------------------------------------------------------- #
-DEFAULT_CONFIG = {
+CONFIG_FILENAME = "config.toml"
+LEGACY_CONFIG_FILENAMES = ("config.yml", "config.yaml")
+DEFAULT_CONFIG: dict[str, object] = {
     "title": "", "images_dir": "", "images_dirs": [], "theme": "auto", "theme_light": "rose-pine-dawn",
-    "theme_dark": "mocha", "sort_by": "name", "sticky_header": "true", "show_filename": "false",
-    "show_created_time": "false", "show_file_size": "false", "show_video_thumbnails": "false",
-    "folder_filter_depth": "1", "show_media_info": "false",
-    # --- mới ở v3 ---
-    "default_view": "feed", "columns": "0", "feed_width": "720", "probe_dimensions": "true",
-    "show_dimensions": "false", "video_autoplay": "false",
+    "theme_dark": "mocha", "sort_by": "name", "sticky_header": True, "show_filename": False,
+    "show_created_time": False, "show_file_size": False, "show_video_thumbnails": False,
+    "show_dimensions": False, "folder_filter_depth": 1, "default_view": "feed", "columns": 0,
+    "feed_width": 720, "probe_dimensions": True, "video_autoplay": False,
+}
+CONFIG_ALIASES = {
+    "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
+    "image_folders": "images_dirs", "folders": "images_dirs", "sort": "sort_by", "order": "sort_by",
+    "view": "default_view", "layout": "default_view", "cols": "columns", "width": "feed_width",
+    "autoplay": "video_autoplay",
 }
 
 
-def _strip_yaml_comment(value: str) -> str:
-    quote_char = None
-    escaped = False
-    for i, char in enumerate(value):
-        if escaped:
-            escaped = False
-        elif char == "\\" and quote_char == '"':
-            escaped = True
-        elif quote_char:
-            if char == quote_char:
-                quote_char = None
-        elif char in ("'", '"'):
-            quote_char = char
-        elif char == "#" and (i == 0 or value[i - 1].isspace()):
-            return value[:i].rstrip()
-    return value.strip()
-
-
-def _yaml_scalar(value: str) -> str:
-    value = _strip_yaml_comment(value.strip())
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        if value[0] == '"':
-            try:
-                return str(json.loads(value))
-            except json.JSONDecodeError:
-                return value[1:-1]
-        return value[1:-1].replace("''", "'")
-    return value
-
-
-def _parse_simple_yaml(path: Path) -> dict[str, object]:
-    """Parse flat YAML settings and an images_dirs block list."""
-    values: dict[str, object] = {}
-    list_key: str | None = None
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped in ("---", "..."):
-            continue
-        if list_key and line[:1].isspace():
-            item = re.match(r"^-\s*(.*?)\s*$", stripped)
-            if item:
-                values.setdefault(list_key, []).append(_yaml_scalar(item.group(1)))
-                continue
-        list_key = None
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$", stripped)
-        if not match:
-            raise ValueError(f"config.yml dòng {line_no}: dùng khóa dạng key: value hoặc danh sách images_dirs với dấu gạch ngang")
-        key, value = match.groups()
-        key = key.casefold()
-        if key == "images_dirs" and not value:
-            values[key] = []
-            list_key = key
-            continue
-        if key == "images_dirs" and value.startswith("[") and value.endswith("]"):
-            body = value[1:-1].strip()
-            values[key] = [_yaml_scalar(part) for part in body.split(",") if part.strip()]
-            continue
-        value = _yaml_scalar(value)
-        if value.startswith(("{", "|", ">")):
-            raise ValueError(f"config.yml dòng {line_no}: chỉ hỗ trợ giá trị chữ đơn giản")
-        values[key] = value
-    return values
-
-
 def load_config(script_dir: Path) -> tuple[dict[str, object], Path | None]:
-    candidates = [script_dir / "config.yml", Path.cwd() / "config.yml"]
-    config_path = next((path for path in candidates if path.is_file()), None)
-    config = dict(DEFAULT_CONFIG)
+    """Đọc config.toml (cạnh script hoặc trong thư mục hiện tại). Không có file → dùng mặc định."""
+    directories = [script_dir, Path.cwd()]
+    config_path = next((d / CONFIG_FILENAME for d in directories if (d / CONFIG_FILENAME).is_file()), None)
+    config = {key: (list(value) if isinstance(value, list) else value) for key, value in DEFAULT_CONFIG.items()}
     if config_path is None:
+        for directory in directories:
+            for legacy in LEGACY_CONFIG_FILENAMES:
+                if (directory / legacy).is_file():
+                    raise ValueError(f"Tìm thấy {directory / legacy} nhưng phiên bản này chỉ đọc {CONFIG_FILENAME}. "
+                                     f"Hãy chuyển cấu hình sang {CONFIG_FILENAME} (xem file mẫu và README).")
         return config, None
-    loaded = _parse_simple_yaml(config_path)
-    aliases = {"name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
-               "image_folders": "images_dirs", "folders": "images_dirs", "sort": "sort_by", "order": "sort_by",
-               "view": "default_view", "layout": "default_view", "cols": "columns", "width": "feed_width",
-               "autoplay": "video_autoplay"}
-    for key, value in loaded.items():
-        key = aliases.get(key, key)
+    try:
+        with open(config_path, "rb") as handle:
+            loaded = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"{config_path.name}: {exc}") from exc
+    unknown: list[str] = []
+    for raw_key, value in loaded.items():
+        key = CONFIG_ALIASES.get(raw_key.casefold(), raw_key.casefold())
         if key in config:
             config[key] = value
-    if "show_media_info" in loaded:
+        elif key != "show_media_info":
+            unknown.append(raw_key)
+    if "show_media_info" in loaded:  # khóa cũ của v2: bật cả tên file và ngày tạo
         for key in ("show_filename", "show_created_time"):
             if key not in loaded:
                 config[key] = loaded["show_media_info"]
+    if unknown:
+        print(f"Cảnh báo: {config_path.name} có khóa không nhận ra, đã bỏ qua: {', '.join(unknown)}", file=sys.stderr)
     return config, config_path
 
 
@@ -918,6 +876,18 @@ body{background:radial-gradient(ellipse 70% 30rem at 50% -14rem,color-mix(in srg
 .feed.grid .media-item{cursor:zoom-in}
 .tb .lbl{font-size:11px}
 @media(max-width:480px){.tb .lbl{display:none}.controls{gap:5px}}
+
+/* ---------- Lọc theo tìm kiếm ---------- */
+.chip-bar{max-width:1500px;margin:0 auto;padding:0 16px 8px;display:flex}
+.s-chip{display:inline-flex;align-items:center;max-width:100%;border:1px solid color-mix(in srgb,var(--mauve) 50%,var(--surface1));border-radius:999px;background:color-mix(in srgb,var(--mauve) 13%,var(--surface0));font-size:12px;font-weight:650;overflow:hidden}
+.chip-main,.chip-x{display:inline-flex;align-items:center;gap:7px;border:0;background:none;padding:5px 8px 5px 12px;min-width:0}
+.chip-main:hover,.chip-x:hover{background:color-mix(in srgb,var(--mauve) 18%,transparent)}
+.chip-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:min(52vw,420px)}
+.chip-main em{font-style:normal;color:var(--subtext);font-weight:600;white-space:nowrap}
+.chip-x{padding:5px 10px 5px 8px;border-left:1px solid color-mix(in srgb,var(--mauve) 30%,transparent)}
+.search-tools{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.search-tools .btn{flex:none;padding:6px 11px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:default;pointer-events:none}
 '''
 
 BODY = r'''</style>
@@ -955,6 +925,9 @@ __SPRITE__
       <button class="hdr-tool" id="hRandom" type="button" title="Bài ngẫu nhiên (R)"><span data-ic="shuffle"></span>Ngẫu nhiên <kbd>R</kbd></button>
       <button class="hdr-tool" id="hTheme" type="button" title="Chọn theme (M)"><span data-ic="palette"></span>Theme <kbd>M</kbd></button>
     </nav>
+  </div>
+  <div class="chip-bar" id="chipBar" hidden>
+    <span class="s-chip" role="status"><button class="chip-main" id="chipMain" type="button" title="Sửa nội dung lọc"><span data-ic="search"></span><b id="chipText"></b><em id="chipCount"></em></button><button class="chip-x" id="chipClear" type="button" title="Bỏ lọc tìm kiếm (Esc)" aria-label="Bỏ lọc tìm kiếm"><span data-ic="x"></span></button></span>
   </div>
   <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
 </header>
@@ -1032,7 +1005,7 @@ __SPRITE__
   <div class="sheet search-sheet">
     <div class="sheet-head"><h2 id="searchTitle">Tìm và nhảy tới bài</h2><button class="x-btn" id="searchClose" type="button" aria-label="Đóng tìm kiếm"><span data-ic="x"></span></button></div>
     <input id="searchQuery" type="search" maxlength="180" autocomplete="off" spellcheck="false" placeholder="Số bài, tên file, ghi chú…  (is:video · is:gif · is:multi · is:liked · is:note)">
-    <div class="search-count" id="searchCount" aria-live="polite"></div>
+    <div class="search-tools"><div class="search-count" id="searchCount" aria-live="polite"></div><button class="btn primary" id="searchApply" type="button" title="Chỉ hiện các bài khớp trong danh sách chính (Shift+Enter)"><span data-ic="filter"></span><span id="searchApplyLbl">Lọc danh sách</span></button></div>
     <div class="search-results" id="searchResults"></div>
   </div>
 </section>
@@ -1062,6 +1035,7 @@ __SPRITE__
       </section>
       <section class="shortcut-group"><h3>Công cụ</h3>
         <div class="sc"><span><b>Tìm / nhảy tới bài</b><small>Số bài, tên file, ghi chú, is:video…</small></span><kbd>G</kbd></div>
+        <div class="sc"><span><b>Lọc danh sách theo tìm kiếm</b><small>Chỉ xem các bài khớp · Esc để bỏ lọc</small></span><kbd>⇧ Enter</kbd></div>
         <div class="sc"><span><b>Thích / lọc bài đã thích</b><small>Lưu bài yêu thích</small></span><kbd>L</kbd><kbd>F</kbd></div>
         <div class="sc"><span><b>Đổi bố cục</b><small>Danh sách ⇄ lưới masonry</small></span><kbd>V</kbd></div>
         <div class="sc"><span><b>Đổi theme</b><small>Chọn giao diện màu</small></span><kbd>M</kbd></div>
@@ -1080,6 +1054,7 @@ __SPRITE__
       <li>Lưới masonry cân cột thật, chọn số cột; ảnh có kích thước sẵn nên trang không bị nhảy khi tải.</li>
       <li>Xem ảnh: phóng to/kéo, chụm 2 ngón, trình chiếu, toàn màn hình, tải xuống, bảng thông tin, tải trước ảnh kế bên.</li>
       <li>Tìm kiếm có toán tử (is:video, is:gif, is:multi, is:liked, is:note), duyệt bằng phím mũi tên.</li>
+      <li>Mới ở 3.1: nút <b>Lọc danh sách</b> (Shift+Enter) chỉ hiện các bài khớp tìm kiếm, kèm thanh trạng thái để sửa hoặc bỏ lọc.</li>
       <li>Bài ngẫu nhiên, đảo thứ tự, thanh tiến độ, liên kết trực tiếp tới bài (#p123), nút Back đóng ảnh trên điện thoại.</li>
       <li>Sao lưu bằng file, tự phát video khi lướt tới, thêm theme Dracula / Solarized / Midnight / Sakura.</li>
     </ul></details>
@@ -1116,7 +1091,7 @@ const prefs=Object.assign({view:DEFAULTS.view,cols:DEFAULTS.cols,width:DEFAULTS.
 if(prefs.view!=='grid')prefs.view='feed';
 const savePrefs=()=>save(STORE.prefs,prefs);
 const liked=new Set(readJSON(STORE.likes,[]).filter(x=>typeof x==='string'&&ID_INDEX.has(x)));
-let typeFilter=new Set([0,1,2]),folderFilter=new Set(FOLDER_PATHS),onlyLiked=false,likedReturn=null;
+let typeFilter=new Set([0,1,2]),folderFilter=new Set(FOLDER_PATHS),onlyLiked=false,likedReturn=null,searchFilter=null;
 let view=[],viewPos=new Int32Array(POSTS.length),cursor=0,focusIdx=0,restoreLock=true,colN=1,cols=[],colH=[];
 const cards=new Map();
 let toastTimer;
@@ -1204,8 +1179,9 @@ function measureFeedWidth(){feedWidthCache=Math.min(feed.clientWidth||innerWidth
 const isGrid=()=>prefs.view==='grid';
 function calcCols(){if(prefs.cols>0)return clamp(prefs.cols,1,10);const w=feed.clientWidth||innerWidth;return clamp(Math.floor((w+14)/(w<600?170:250)),2,8)}
 function computeView(){
-  const out=[],allFolders=folderFilter.size===FOLDER_PATHS.length;let mask=0;typeFilter.forEach(k=>mask|=1<<k);
-  for(let i=0;i<POSTS.length;i++){const p=POSTS[i];if(!(p.mask&mask))continue;if(!allFolders&&p.f&&!folderFilter.has(p.f))continue;if(onlyLiked&&!liked.has(p.id))continue;out.push(i)}
+  const out=[],allFolders=folderFilter.size===FOLDER_PATHS.length,sq=searchFilter&&searchFilter.q;let mask=0;typeFilter.forEach(k=>mask|=1<<k);
+  if(sq)buildIndex();
+  for(let i=0;i<POSTS.length;i++){const p=POSTS[i];if(!(p.mask&mask))continue;if(!allFolders&&p.f&&!folderFilter.has(p.f))continue;if(onlyLiked&&!liked.has(p.id))continue;if(sq&&!matchPost(i,sq))continue;out.push(i)}
   if(prefs.reverse)out.reverse();
   view=out;viewPos.fill(-1);for(let i=0;i<out.length;i++)viewPos[out[i]]=i;
 }
@@ -1215,8 +1191,9 @@ function rebuild(){
   const grid=isGrid();feed.classList.toggle('grid',grid);
   if(grid){colN=calcCols();cols=[];colH=new Array(colN).fill(0);for(let i=0;i<colN;i++){const c=document.createElement('div');c.className='col';feed.append(c);cols.push(c)}}
   const empty=view.length===0;$('empty').hidden=!empty;sentinel.hidden=empty;
-  if(empty)$('emptyMsg').textContent=onlyLiked&&!liked.size?'Bạn chưa thích bài nào. Bấm biểu tượng trái tim ở mỗi bài để lưu lại.':POSTS.length?'Không có bài nào khớp bộ lọc hiện tại.':'Không tìm thấy ảnh hoặc video trong thư mục media đã chọn hoặc các thư mục con.';
-  $('emptyReset').hidden=!(onlyLiked||typeFilter.size<3||folderFilter.size<FOLDER_PATHS.length);
+  if(empty)$('emptyMsg').textContent=searchFilter?'Không có bài nào khớp tìm kiếm và bộ lọc hiện tại.':onlyLiked&&!liked.size?'Bạn chưa thích bài nào. Bấm biểu tượng trái tim ở mỗi bài để lưu lại.':POSTS.length?'Không có bài nào khớp bộ lọc hiện tại.':'Không tìm thấy ảnh hoặc video trong thư mục media đã chọn hoặc các thư mục con.';
+  $('emptyReset').hidden=!(searchFilter||onlyLiked||typeFilter.size<3||folderFilter.size<FOLDER_PATHS.length);
+  updateSearchChip();
   renderMore(grid?colN*6:12);
   fillNearViewport();updateLikeCount();updatePos();
 }
@@ -1283,7 +1260,7 @@ function randomPost(){
   gotoPost(idx,{block:isGrid()?'center':'start'});toast(`Bài ngẫu nhiên #${idx+1}`);
 }
 function resetFilters(silent){
-  typeFilter=new Set([0,1,2]);folderFilter=new Set(FOLDER_PATHS);onlyLiked=false;likedReturn=null;
+  typeFilter=new Set([0,1,2]);folderFilter=new Set(FOLDER_PATHS);onlyLiked=false;likedReturn=null;searchFilter=null;
   syncFilterUI();computeView();rebuild();if(!silent)window.scrollTo(0,0);
 }
 function applyFilters(){
@@ -1402,24 +1379,26 @@ function parseQuery(raw){
   if(q.text.length===1&&/^\d+$/.test(q.text[0])&&!q.kinds&&!q.multi&&!q.liked&&!q.note)q.num=Number(q.text[0]);
   return q;
 }
+/* Một vị từ dùng chung cho hộp tìm kiếm VÀ bộ lọc danh sách. */
+function matchPost(i,q){
+  const p=POSTS[i];
+  if(q.num!==null)return i===q.num-1;
+  if(q.kinds&&!(p.mask&q.kinds))return false;
+  if(q.multi&&p.m.length<2)return false;
+  if(q.liked&&!liked.has(p.id))return false;
+  if(q.note&&!p.n)return false;
+  for(const t of q.text)if(!searchIndex[i].includes(t))return false;
+  return true;
+}
 function runSearch(){
-  buildIndex();const raw=searchQuery.value.trim(),q=parseQuery(raw),hits=[];
+  buildIndex();const raw=searchQuery.value.trim(),q=parseQuery(raw),hits=[],has=raw.length>0;
   if(q.num!==null){if(q.num>=1&&q.num<=POSTS.length)hits.push(q.num-1)}
-  else{
-    const has=raw.length>0;
-    for(let i=0;i<POSTS.length;i++){
-      const p=POSTS[i];
-      if(q.kinds&&!(p.mask&q.kinds))continue;
-      if(q.multi&&p.m.length<2)continue;if(q.liked&&!liked.has(p.id))continue;if(q.note&&!p.n)continue;
-      let ok=true;for(const t of q.text)if(!searchIndex[i].includes(t)){ok=false;break}
-      if(!ok)continue;
-      hits.push(i);if(!has&&hits.length>=searchLimit)break;
-    }
-  }
+  else for(let i=0;i<POSTS.length;i++){if(!matchPost(i,q))continue;hits.push(i);if(!has&&hits.length>=searchLimit)break}
   searchHits=hits;renderSearch(raw);
 }
 function renderSearch(raw){
   const total=searchHits.length,shown=searchHits.slice(0,searchLimit);
+  const ab=$('searchApply');ab.disabled=!raw&&!searchFilter;$('searchApplyLbl').textContent=!raw&&searchFilter?'Bỏ lọc':raw?`Lọc danh sách (${total})`:'Lọc danh sách';
   searchCount.textContent=raw?`${total} bài phù hợp${total>shown.length?` · đang hiện ${shown.length}`:''}`:`${POSTS.length} bài · nhập số thứ tự, tên file hoặc từ khóa`;
   searchResults.replaceChildren();searchSel=Math.min(searchSel,Math.max(0,shown.length-1));
   if(!shown.length){const d=document.createElement('div');d.className='s-empty';d.textContent='Không tìm thấy bài phù hợp.';searchResults.append(d);return}
@@ -1439,12 +1418,33 @@ function renderSearch(raw){
   if(total>shown.length){const m=document.createElement('button');m.type='button';m.className='btn s-more';m.textContent=`Hiện thêm (${total-shown.length})`;m.onclick=()=>{searchLimit+=60;renderSearch(raw)};frag.append(m)}
   searchResults.append(frag);
 }
+function applySearchFilter(){
+  const raw=searchQuery.value.trim();
+  if(!raw){if(searchFilter){closeSearch(true);clearSearchFilter()}return}
+  buildIndex();const q=parseQuery(raw);let any=false;
+  for(let i=0;i<POSTS.length;i++)if(matchPost(i,q)){any=true;break}
+  if(!any){toast('Không có bài nào khớp để lọc');return}
+  searchFilter={raw,q};closeSearch(true);computeView();
+  if(view.length)focusIdx=view[0];
+  rebuild();window.scrollTo(0,0);
+  toast(`Đang lọc "${raw}" · ${view.length} bài`);
+}
+function clearSearchFilter(){
+  if(!searchFilter)return;const keep=focusIdx;searchFilter=null;computeView();rebuild();
+  if(viewPos[keep]>=0)gotoPost(keep,{block:isGrid()?'center':'start'});else window.scrollTo(0,0);
+  toast('Đã bỏ lọc tìm kiếm');
+}
+function updateSearchChip(){
+  const bar=$('chipBar');bar.hidden=!searchFilter;
+  if(searchFilter){$('chipText').textContent=searchFilter.raw;$('chipCount').textContent=view.length+' bài'}
+}
+$('searchApply').onclick=applySearchFilter;$('chipClear').onclick=clearSearchFilter;$('chipMain').onclick=()=>openSearch();
 function pickSearch(idx){closeSearch(true);gotoPost(idx);toast(`Đã mở bài ${idx+1}`)}
 searchResults.addEventListener('click',e=>{const b=e.target.closest('.s-item');if(b)pickSearch(+b.dataset.idx)});
 function moveSel(d){const items=searchResults.querySelectorAll('.s-item');if(!items.length)return;items[searchSel]?.classList.remove('sel');searchSel=clamp(searchSel+d,0,items.length-1);items[searchSel].classList.add('sel');items[searchSel].scrollIntoView({block:'nearest'})}
 let searchTimer;searchQuery.addEventListener('input',()=>{clearTimeout(searchTimer);searchLimit=60;searchSel=0;searchTimer=setTimeout(runSearch,90)});
-searchQuery.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();clearTimeout(searchTimer);runSearch();const idx=searchHits[searchSel];if(idx!=null)pickSearch(idx)}else if(e.key==='ArrowDown'){e.preventDefault();moveSel(1)}else if(e.key==='ArrowUp'){e.preventDefault();moveSel(-1)}});
-function openSearch(v){closeSettings();closeFilter();searchDlg.classList.add('active');searchQuery.value=v||'';searchLimit=60;searchSel=0;runSearch();requestAnimationFrame(()=>{syncVV();searchQuery.focus();searchQuery.select()})}
+searchQuery.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.shiftKey){e.preventDefault();clearTimeout(searchTimer);applySearchFilter()}else if(e.key==='Enter'){e.preventDefault();clearTimeout(searchTimer);runSearch();const idx=searchHits[searchSel];if(idx!=null)pickSearch(idx)}else if(e.key==='ArrowDown'){e.preventDefault();moveSel(1)}else if(e.key==='ArrowUp'){e.preventDefault();moveSel(-1)}});
+function openSearch(v){closeSettings();closeFilter();searchDlg.classList.add('active');searchQuery.value=v!=null?v:(searchFilter?searchFilter.raw:'');searchLimit=60;searchSel=0;runSearch();requestAnimationFrame(()=>{syncVV();searchQuery.focus();searchQuery.select()})}
 function closeSearch(noFocus){searchDlg.classList.remove('active');if(!noFocus)$('jumpBtn').focus()}
 $('searchClose').onclick=()=>closeSearch();searchDlg.addEventListener('click',e=>{if(e.target===searchDlg)closeSearch()});
 
@@ -1603,7 +1603,7 @@ document.addEventListener('keydown',e=>{
     wake();return;
   }
   if(help.classList.contains('active')){if(k==='Escape'||k==='?'||k==='h'||k==='H')toggleHelp();return}
-  if(k==='Escape'){if(filterPop.classList.contains('open')){closeFilter();return}if(settingsMenu.classList.contains('open')){closeSettings();return}}
+  if(k==='Escape'){if(filterPop.classList.contains('open')){closeFilter();return}if(settingsMenu.classList.contains('open')){closeSettings();return}if(searchFilter){clearSearchFilter();return}}
   if(e.code==='Space'){e.preventDefault();navigatePost(e.shiftKey?-1:1)}
   else if(k==='j'||k==='J'||k==='ArrowDown'){e.preventDefault();navigatePost(1)}
   else if(k==='k'||k==='K'||k==='ArrowUp'){e.preventDefault();navigatePost(-1)}
@@ -1815,7 +1815,13 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
 def resolve_folders(args, config: dict, config_path: Path | None, script_dir: Path) -> list[Path]:
     if args.images is not None:
         return [args.images if args.images.is_absolute() else Path.cwd() / args.images]
-    configured = config.get("images_dirs") or ([config["images_dir"]] if config.get("images_dir") else [])
+    dirs = config.get("images_dirs") or []
+    if isinstance(dirs, str):
+        dirs = [dirs]
+    single = config.get("images_dir") or ""
+    if not isinstance(dirs, list) or not all(isinstance(v, str) for v in dirs) or not isinstance(single, str):
+        raise ValueError('images_dir phải là chuỗi và images_dirs phải là danh sách chuỗi, ví dụ ["Images", "Videos"]')
+    configured = dirs or ([single] if single else [])
     if configured:
         base_dir = config_path.parent if config_path else script_dir
         if len(configured) == 1 and str(configured[0]).strip().casefold() == "all":
@@ -1834,16 +1840,16 @@ def build_options(args, config: dict) -> Options:
         return {"tokyonight": "tokyo-night", "rosepine": "rose-pine", "solarized": "solarized-dark",
                 "amoled": "midnight", "black": "midnight"}.get(name, name)
 
-    def truthy(key: str, default: str = "false") -> bool:
-        return str(config.get(key, default)).strip().casefold() in ("true", "yes", "1", "on", "enabled")
+    def truthy(key: str, default: bool = False) -> bool:
+        value = config.get(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().casefold() in ("true", "yes", "1", "on", "enabled")
 
     def integer(key: str, low: int, high: int) -> int:
-        try:
-            value = int(str(config.get(key)).strip())
-        except (TypeError, ValueError):
-            raise ValueError(f"{key} phải là số nguyên từ {low} đến {high}")
-        if not low <= value <= high:
-            raise ValueError(f"{key} phải là số nguyên từ {low} đến {high}")
+        value = config.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise ValueError(f"{key} phải là số nguyên từ {low} đến {high} (viết số trần, không đặt trong dấu ngoặc kép)")
         return value
 
     theme = normalize_theme(args.theme or config.get("theme") or "mocha")
@@ -1863,11 +1869,11 @@ def build_options(args, config: dict) -> Options:
         raise ValueError("default_view phải là feed hoặc grid")
     return Options(
         title=str(args.title or config.get("title") or ""), theme=theme, theme_light=theme_light, theme_dark=theme_dark,
-        sort_by=sort_by, sticky_header=str(config.get("sticky_header", "true")).strip().casefold() not in ("false", "no", "0", "off", "disabled"),
+        sort_by=sort_by, sticky_header=truthy("sticky_header", True),
         show_filename=truthy("show_filename"), show_created_time=truthy("show_created_time"), show_file_size=truthy("show_file_size"),
         show_video_thumbnails=truthy("show_video_thumbnails"), show_dimensions=truthy("show_dimensions"),
         folder_filter_depth=integer("folder_filter_depth", 0, 10), default_view=view, columns=integer("columns", 0, 10),
-        feed_width=integer("feed_width", 480, 1100), probe_dimensions=truthy("probe_dimensions", "true") and not args.no_probe,
+        feed_width=integer("feed_width", 480, 1100), probe_dimensions=truthy("probe_dimensions", True) and not args.no_probe,
         video_autoplay=truthy("video_autoplay"),
     )
 
@@ -1900,11 +1906,11 @@ def run_build(args, script_dir: Path) -> tuple[int, Path, Options, list[Path]]:
 
 def main() -> int:
     script_dir = Path(__file__).resolve().parent
-    parser = argparse.ArgumentParser(description="Tạo archive HTML offline (kiểu Tumblr) từ config.yml và thư mục media.")
-    parser.add_argument("--images", type=Path, default=None, help="Ghi đè danh sách thư mục trong config.yml bằng một thư mục")
+    parser = argparse.ArgumentParser(description="Tạo archive HTML offline (kiểu Tumblr) từ config.toml và thư mục media.")
+    parser.add_argument("--images", type=Path, default=None, help="Ghi đè danh sách thư mục trong config.toml bằng một thư mục")
     parser.add_argument("--output", type=Path, default=None, help="File HTML đầu ra (mặc định: index.html cạnh script)")
-    parser.add_argument("--title", default=None, help="Ghi đè tên archive trong config.yml")
-    parser.add_argument("--theme", default=None, help="Ghi đè theme trong config.yml (auto hoặc: " + ", ".join(THEMES) + ")")
+    parser.add_argument("--title", default=None, help="Ghi đè tên archive trong config.toml")
+    parser.add_argument("--theme", default=None, help="Ghi đè theme trong config.toml (auto hoặc: " + ", ".join(THEMES) + ")")
     parser.add_argument("--sort-by", default=None, choices=("name", "created", "created_desc"), help="Sắp xếp theo tên, ngày tạo tăng dần hoặc mới nhất trước")
     parser.add_argument("--no-probe", action="store_true", help="Bỏ qua bước đọc kích thước ảnh (build nhanh hơn, nhưng trang có thể nhảy layout khi ảnh tải)")
     parser.add_argument("--clear-cache", action="store_true", help="Xóa cache kích thước ảnh rồi build lại")

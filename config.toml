@@ -1,86 +1,92 @@
 # ============================================================================
-#  config.yml — cấu hình cho build_archive.py (v3.0)
+#  config.toml — cấu hình cho build_archive.py (v3.1, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
-#  Bỏ dấu # ở đầu dòng để bật một tùy chọn. Mọi tùy chọn đều có giá trị mặc định.
+#  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
+#
+#  Cú pháp TOML cần nhớ:
+#    - Chữ đặt trong dấu ngoặc kép:      title = "My Archive"
+#    - Đúng/sai viết thường, KHÔNG ngoặc: sticky_header = true
+#    - Số viết trần, KHÔNG ngoặc:         feed_width = 720
+#    - Đường dẫn Windows: dùng dấu / (D:/Pictures) hoặc đặt trong nháy đơn ('D:\Pictures')
 # ============================================================================
 
 # --- Nội dung ---------------------------------------------------------------
 
 # Tên hiển thị trên đầu trang. Để trống = "<tên thư mục chứa script> Archive".
-title: My Archive
+title = "My Archive"
 
 # Thư mục chứa ảnh/video (quét cả thư mục con). Đường dẫn tương đối tính từ
-# vị trí của config.yml; đường dẫn tuyệt đối cũng được.
+# vị trí của config.toml; đường dẫn tuyệt đối cũng được.
 # Nếu không khai báo gì, script tự tìm thư mục "Images" hoặc "images" cạnh nó.
-images_dir: Images
+images_dir = "Images"
 
 # Nhiều thư mục: dùng danh sách bên dưới (sẽ thay thế images_dir).
 # Khi có từ 2 thư mục trở lên, mỗi bài hiện nhãn thư mục nguồn và menu Lọc
 # có thêm mục chọn thư mục.
-# images_dirs:
-#   - Images
-#   - D:/Pictures/Tumblr
-#   - ../Backup/Memes
+# images_dirs = [
+#   "Images",
+#   "D:/Pictures/Tumblr",
+#   "../Backup/Memes",
+# ]
 #
-# Hoặc dạng gọn:  images_dirs: [Images, Videos]
-# Đặc biệt:      images_dirs: [all]   → dùng mọi thư mục con (có chứa media) cạnh config.yml
+# Đặc biệt: images_dirs = ["all"]  → dùng mọi thư mục con (có chứa media) cạnh config.toml
 
 # --- Giao diện ----------------------------------------------------------------
 
-# Theme: auto | mocha | frappe | macchiato | latte | nord | tokyo-night | gruvbox
-#        | rose-pine | noir-velvet | oxblood | nord-light | tokyo-night-light
-#        | gruvbox-light | rose-pine-dawn | dracula | solarized-dark
-#        | solarized-light | midnight | sakura
+# Theme: "auto" hoặc một trong:
+#   mocha, frappe, macchiato, latte, nord, tokyo-night, gruvbox, rose-pine,
+#   noir-velvet, oxblood, nord-light, tokyo-night-light, gruvbox-light,
+#   rose-pine-dawn, dracula, solarized-dark, solarized-light, midnight, sakura
 # "auto" = tự chuyển sáng/tối theo hệ điều hành, dùng hai theme bên dưới.
 # Người xem vẫn đổi được theme ngay trên trang (phím M) và trình duyệt sẽ nhớ lựa chọn.
-theme: auto
-theme_light: rose-pine-dawn
-theme_dark: mocha
+theme = "auto"
+theme_light = "rose-pine-dawn"
+theme_dark = "mocha"
 
-# Bố cục mặc định khi mở lần đầu: feed (danh sách kiểu Tumblr) | grid (lưới masonry)
-default_view: feed
+# Bố cục mặc định khi mở lần đầu: "feed" (danh sách kiểu Tumblr) hoặc "grid" (lưới masonry)
+default_view = "feed"
 
 # Số cột của lưới: 0 = tự động theo độ rộng màn hình, hoặc 1–10.
-columns: 0
+columns = 0
 
 # Độ rộng cột đọc ở chế độ feed, tính bằng px (480–1100).
-feed_width: 720
+feed_width = 720
 
-# Thanh tiêu đề dính ở đầu trang khi cuộn: true | false
-sticky_header: true
+# Thanh tiêu đề dính ở đầu trang khi cuộn.
+sticky_header = true
 
 # --- Thứ tự bài -------------------------------------------------------------
 
-# name         : theo tên file (thứ tự tự nhiên: 2 đứng trước 10)
-# created      : ngày tạo, cũ nhất trước
-# created_desc : ngày tạo, mới nhất trước
-sort_by: name
+# "name"         : theo tên file (thứ tự tự nhiên: 2 đứng trước 10)
+# "created"      : ngày tạo, cũ nhất trước
+# "created_desc" : ngày tạo, mới nhất trước
+sort_by = "name"
 
 # --- Thông tin hiển thị dưới mỗi media ----------------------------------------
 
-show_filename: false
-show_created_time: false
-show_file_size: false
+show_filename = false
+show_created_time = false
+show_file_size = false
 # Kích thước điểm ảnh, ví dụ 1200×800
-show_dimensions: false
+show_dimensions = false
 
 # --- Video --------------------------------------------------------------------
 
 # true  : hiện khung hình đầu của video làm ảnh xem trước (tải nhiều dữ liệu hơn)
 # false : chỉ tải video khi bấm phát (nhanh và nhẹ hơn)
-show_video_thumbnails: false
+show_video_thumbnails = false
 # Tự phát video (tắt tiếng, lặp lại) khi cuộn tới; tạm dừng khi cuộn đi.
-video_autoplay: false
+video_autoplay = false
 
 # --- Bộ lọc thư mục -----------------------------------------------------------
 
 # Số cấp thư mục con dùng làm mục lọc (0 = tắt lọc theo thư mục con).
 # Ví dụ: Images/Anime/2023/x.jpg → depth 1 tạo mục "Images/Anime".
-folder_filter_depth: 1
+folder_filter_depth = 1
 
 # --- Hiệu năng khi build ------------------------------------------------------
 
 # true : đọc kích thước ảnh lúc build (có cache) để trang không bị nhảy layout
 #        khi ảnh tải, và masonry dựng chính xác. Nên để bật.
 # false: bỏ qua bước này (build nhanh hơn một chút, nhưng trang kém mượt).
-probe_dimensions: true
+probe_dimensions = true
