@@ -1,6 +1,6 @@
-# Tumblr-style Media Archive (build_archive.py v3.2)
+# Tumblr-style Media Archive (build_archive.py v3.3)
 
-Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone…
+Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz…
 
 Không cần cài thêm gì: chỉ cần **Python 3.11 trở lên** (đọc cấu hình bằng `tomllib` có sẵn trong thư viện chuẩn, không phụ thuộc thư viện ngoài). Chạy bằng Python cũ hơn, script sẽ báo lỗi rõ ràng và dừng.
 
@@ -46,6 +46,10 @@ Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 | Video | `show_video_thumbnails` | Hiện khung hình đầu | `false` |
 | | `video_autoplay` | Tự phát (tắt tiếng) khi cuộn tới | `false` |
 | Lọc | `folder_filter_depth` | 0–10 cấp thư mục con | `1` |
+| File nén | `zip_support` | `true` \| `false` — xử lý `.zip`/`.cbz` như thư mục ảo | `true` |
+| | `zip_post_mode` | `"folder"` (gom như thư mục) \| `"archive"` (mỗi file nén là một bài) | `"folder"` |
+| | `zip_cache_mb` | Ngưỡng RAM (MB) giữ lại ảnh đã giải nén nhưng không còn hiển thị | `48` |
+| | `unzipit_path` / `unzipit_url` | File unzipit local để nhúng / địa chỉ CDN | tự nhận / jsDelivr |
 | Loại trừ | `ignored_folders` | Danh sách tên/mẫu thư mục bỏ qua khi quét | `[]` |
 | Icon iOS | `app_icon` | Đường dẫn file PNG làm icon Màn hình chính | tự tìm / tự vẽ |
 | | `app_name` | Tên ngắn dưới icon | `title` |
@@ -91,6 +95,8 @@ python build_archive.py [tùy chọn]
   --title TÊN          Ghi đè tên archive
   --theme TÊN          Ghi đè theme
   --sort-by KIỂU       name | created | created_desc
+  --no-zip             Không quét bên trong file .zip/.cbz
+  --unzipit FILE       File unzipit cục bộ để nhúng vào HTML (ghi đè unzipit_path)
   --ignore MẪU         Bỏ qua thư mục khớp mẫu (lặp lại được, gộp với ignored_folders)
   --icon FILE.png      Icon Màn hình chính iOS (ghi đè app_icon)
   --no-probe           Bỏ qua bước đọc kích thước ảnh
@@ -191,6 +197,7 @@ Gõ số thứ tự (`300` hoặc `#300`), tên file, tên thư mục hoặc n�
 | `is:multi` | Bài có nhiều media |
 | `is:liked` | Bài đã thích |
 | `is:note` | Bài có ghi chú `.md` |
+| `is:zip` | Bài nằm trong file `.zip` / `.cbz` |
 
 Ví dụ: `is:multi cute` · `is:video is:liked`. Dùng `↑` `↓` chọn kết quả, `Enter` để nhảy tới bài.
 
@@ -291,17 +298,65 @@ python build_archive.py --ignore Thumbs --ignore "Anime/2023"
 
 ---
 
-## 9. Hiệu năng và mẹo cho bộ sưu tập lớn
+## 9. Xem trực tiếp file .zip / .cbz như thư mục ảo (mới ở 3.3)
+
+Script coi mỗi file `.zip` và `.cbz` trong thư mục media như **một thư mục ảo**: đọc danh sách file bên trong bằng `zipfile` của Python (**không giải nén ra đĩa**), lập chỉ mục ảnh/video vào archive; trên trang, chỉ **đúng file đang cần xem** mới được giải nén (bằng thư viện [unzipit](https://github.com/greggman/unzipit)) thành Blob rồi hiển thị.
+
+### Phía build (Python)
+
+- Đường dẫn ảo của media là `đường/dẫn/album.cbz/thư_mục_con/trang01.jpg`. Gom bài, lọc theo thư mục (`folder_filter_depth` tính file nén như một cấp), sắp xếp, tìm kiếm đều chạy như với file thường. Ghi chú `album.md` đặt cạnh `album.cbz` được gắn vào bài đầu tiên của file nén.
+- Mỗi media trong file nén mang metadata (phần tử thứ 6 của mục media trong `POSTS`): `[chỉ số file nén trong ARCHIVES, đường dẫn bên trong, chỉ số entry]`. Bảng `ARCHIVES` lưu đường dẫn gốc, dung lượng và số media của từng file nén; mỗi bài thuộc file nén có thêm trường `z`.
+- Kích thước ảnh bên trong được đọc từ header (có cache theo dung lượng + ngày sửa của file nén) nên trang không bị nhảy layout.
+- `zip_post_mode = "archive"` gom cả file nén thành một bài (hợp với truyện tranh); `"folder"` (mặc định) gom theo tên file như thư mục thường.
+- Bỏ qua: thư mục ẩn, `__MACOSX`, file không phải media, file nén lồng trong file nén, entry **có mật khẩu**, và entry nén bằng phương pháp khác **store/deflate** (bzip2, lzma…; unzipit không giải được). Mỗi trường hợp có cảnh báo khi build; file nén hỏng chỉ bị cảnh báo rồi bỏ qua, không làm hỏng build.
+- Tên file bên trong zip không bật cờ UTF-8 (nhiều công cụ cũ) được thử khôi phục từ UTF-8, nên tên tiếng Việt thường hiển thị đúng. Tên theo bảng mã khác (Shift-JIS, GBK…) có thể hiển thị sai, nhưng ảnh vẫn xem được vì trang tra entry theo chỉ số.
+- Mẫu trong `ignored_folders` áp dụng cả cho thư mục bên trong file nén và cho tên file nén (ví dụ `"old_*.zip"`). Dùng `--no-zip` hoặc `zip_support = false` để tắt hoàn toàn.
+
+### Phía trang (JavaScript)
+
+| Việc | Cách xử lý |
+|---|---|
+| Nạp thư viện | Ưu tiên bản **nhúng sẵn** (đặt `unzipit.module.js` / `unzipit.min.js` cạnh `config.toml` rồi build: script tự chuyển thành mã chạy được trong HTML, **hoạt động cả khi offline và khi mở bằng `file://`**). Không có thì `import()` động từ CDN jsDelivr (`unzipit@1.4.3`), **chỉ khi lần đầu cần xem một ảnh trong file nén**; archive không dùng file nén thì không có thêm mã nào. |
+| Giải nén | Chỉ đúng entry đang xem → `entry.blob(mime)` → `URL.createObjectURL` → gán cho `<img>`/`<video>`. |
+| Cache file nén | Mỗi file nén chỉ mở **một lần**, danh sách entry được giữ để dùng lại cho mọi ảnh trong đó (giữ tối đa 6 file nén đang mở, bỏ cái lâu không dùng nhất). |
+| Cache Blob | Blob dùng chung và đếm tham chiếu. Ảnh trong feed/lưới chỉ được giải nén khi cuộn tới gần (≈1400px), **nhả khi cuộn đi xa**; phần "rảnh" được giữ tối đa `zip_cache_mb` MB rồi thu hồi cái cũ nhất. |
+| Lightbox | Đổi ảnh: Blob của ảnh trước bị **revoke ngay** sau khi ảnh mới đã hiển thị; **đóng lightbox: revoke toàn bộ**. Chỉ tải trước tối đa 2 ảnh kế bên (và chỉ ảnh nhỏ hơn 40 MB) để chuyển ảnh mượt. Nút Tải xuống / Mở tab mới giữ Blob thêm 2 phút để việc tải kịp hoàn tất. |
+| Video | Không tự giải nén; hiện nút ▶, bấm mới giải nén. Gỡ khỏi bộ nhớ khi cuộn đi xa. |
+| Thông tin | Bảng thông tin (`I`) ghi **file nén gốc**, **đường dẫn bên trong** và dung lượng file nén. Bài hiển thị nhãn tên file nén; tìm `is:zip` hoặc tên file nén / đường dẫn bên trong. |
+
+### Quan trọng: mở bằng `file://` thì phải chọn file nén
+
+Trình duyệt **cấm trang web tự đọc file trên máy** (`fetch()` tới `file://` bị chặn), nên khi bạn mở `index.html` bằng cách bấm đúp:
+
+- Ảnh trong file nén hiện ô xám "Chọn file … để xem". Bấm vào, hoặc vào **Cài đặt → File nén (zip / cbz)…** để **chọn file**, **chọn cả thư mục chứa**, hoặc **kéo-thả** file `.zip`/`.cbz` vào trang. File được khớp theo tên + dung lượng lúc build. Các ảnh đang chờ (kể cả đang mở trong lightbox) tự tải lại ngay.
+- File đã chọn chỉ có hiệu lực trong **phiên hiện tại** (tải lại trang phải chọn lại). File nén được đọc từng đoạn qua `File`/Blob nên **file hàng GB không bị nạp hết vào RAM**.
+
+Cách tiện hơn: **mở trang qua máy chủ web** (ví dụ `python -m http.server` trong thư mục archive rồi vào `http://localhost:8000/`, hoặc NAS/hosting của bạn). Khi đó trang tự đọc file nén, không cần chọn gì:
+
+- Nếu máy chủ hỗ trợ **HTTP Range** (nginx, Apache, Caddy, NAS thông dụng), trang chỉ tải **đoạn cần thiết** (ví dụ xem một ảnh 6,5 MB trong file nén 64 MB chỉ tải khoảng 6,5 MB).
+- `python -m http.server` **không hỗ trợ Range**: trang sẽ báo và **tải trọn cả file nén** rồi mới đọc (vẫn chạy, nhưng chậm/nặng với file lớn). Dùng máy chủ có Range cho file lớn.
+
+### Giới hạn
+
+- Mỗi entry được giải nén **vào bộ nhớ** (unzipit không stream): ảnh bình thường không sao, nhưng một **video vài trăm MB** trong file nén sẽ chiếm bấy nhiêu RAM khi đang xem. Với video lớn, nên để ngoài file nén.
+- Cần kết nối mạng ở lần đầu cho đến khi bạn nhúng unzipit local.
+- Backup/bài đã thích dùng ID bài như cũ; thêm/bớt file nén làm đổi tập bài nên mã nhận diện archive đổi (hãy sao lưu `E` trước).
+- **Về việc kiểm thử:** môi trường phát triển không có mạng nên **chưa chạy với bản unzipit thật**; toàn bộ logic tích hợp được kiểm chứng bằng một bản mô phỏng API (`unzipRaw`/`unzip`, `HTTPRangeReader`, `entry.blob(type)`) đọc zip thật. Mã dùng đúng các hàm công khai đó và tự dò (có `unzipRaw` thì dùng, không thì dùng `unzip`), nhưng bạn nên thử nhanh một file `.cbz` nhỏ với thư viện thật. Nếu `unzipit.module.js` local có cú pháp không chuyển được, build sẽ cảnh báo và dùng CDN.
+
+---
+
+## 10. Hiệu năng và mẹo cho bộ sưu tập lớn
 
 - Trang chỉ dựng vài bài đầu và tải thêm khi cuộn; ảnh dùng lazy-load. Ảnh đã có kích thước từ lúc build nên không bị nhảy layout.
 - Kiểm thử với 20.000 bài (32.000 media): build khoảng 1,4 giây (bản cũ ~8,6 giây); `index.html` ~3,6 MB (bản cũ ~6,5 MB); trang mở nhanh hơn ~40%.
 - Nhảy rất xa (ví dụ tới bài thứ 15.000 bằng tìm kiếm) cần dựng các bài ở giữa nên mất vài giây; nhảy vài nghìn bài chỉ khoảng nửa giây.
 - Ảnh gốc dung lượng lớn sẽ làm lưới nặng hơn: trình duyệt phải giải mã ảnh gốc để hiển thị ô nhỏ (script không tạo ảnh thu nhỏ).
+- File nén 20.000 ảnh bên trong (11 MB): build ≈2 giây, ≈1 giây khi có cache; trang mở ≈0,3 giây. Lần build đầu phải mở header từng ảnh trong file nén nên với file nén rất lớn có thể mất lâu hơn (chỉ lần đầu, sau đó có cache).
 - Dùng `--watch` khi đang thêm nhiều ảnh; dùng `--no-probe` chỉ khi thật sự cần build nhanh nhất có thể.
 
 ---
 
-## 10. Xử lý sự cố
+## 11. Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -315,11 +370,19 @@ python build_archive.py --ignore Thumbs --ignore "Anime/2023"
 | "cần Python 3.11 trở lên" | Cập nhật Python (`python --version` để kiểm tra). |
 | Icon Màn hình chính không đổi / nền đen | Nền trong suốt sẽ bị iOS tô đen: dùng PNG đặc 180×180 (hoặc cài Pillow). Đổi icon xong phải gỡ ứng dụng khỏi Màn hình chính rồi thêm lại. |
 | Thư mục đã loại trừ vẫn xuất hiện | Kiểm tra mẫu: không có `/` là khớp tên, có `/` là khớp đường dẫn tính từ thư mục media. |
+| Ảnh trong .zip/.cbz là ô xám "Chọn file…" | Bạn đang mở bằng `file://`: bấm vào ô để chọn file nén (hoặc mở qua máy chủ web, xem mục 9). |
+| "không tải được thư viện unzipit" | Không có mạng/CDN bị chặn: đặt `unzipit.module.js` cạnh `config.toml` rồi build lại để nhúng sẵn. |
+| Ảnh trong file nén tải chậm / báo "không hỗ trợ Range" | Máy chủ không hỗ trợ HTTP Range nên phải tải cả file nén; dùng máy chủ có Range (nginx, Caddy…). |
+| File nén bị bỏ qua khi build | Xem cảnh báo: file hỏng, có mật khẩu hoặc nén bằng bzip2/lzma (chỉ hỗ trợ store/deflate). |
 | Muốn build lại từ đầu | `python build_archive.py --clear-cache`. |
 
 ---
 
-## 11. Có gì mới
+## 12. Có gì mới
+
+### 3.3
+- **Xem trực tiếp `.zip` / `.cbz` như thư mục ảo:** lập chỉ mục bằng `zipfile` (không giải nén ra đĩa), giải nén từng file khi cần bằng unzipit, cache file nén và Blob, tự revoke để không tràn RAM, hộp thoại chọn file khi mở bằng `file://`, đọc qua HTTP Range khi có máy chủ.
+- Cấu hình mới: `zip_support`, `zip_post_mode`, `zip_cache_mb`, `unzipit_path`, `unzipit_url`; tham số `--no-zip`, `--unzipit`; toán tử tìm `is:zip`.
 
 ### 3.2
 - **Bộ lọc đã lưu:** thêm, áp dụng nhanh, đổi tên, xóa; nằm trong file sao lưu.

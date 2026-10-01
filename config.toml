@@ -1,5 +1,5 @@
 # ============================================================================
-#  config.toml — cấu hình cho build_archive.py (v3.2, cần Python 3.11+)
+#  config.toml — cấu hình cho build_archive.py (v3.3, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
 #  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
 #
@@ -42,6 +42,34 @@ images_dir = "Images"
 # Lưu ý: đổi danh sách này làm thay đổi tập bài, nên bài đã thích/vị trí đọc cũ có thể không khớp nữa
 # (hãy sao lưu trước bằng phím E).
 # ignored_folders = ["Thumbs", "_old*", "Anime/2023"]
+
+# --- File nén .zip / .cbz (thư mục ảo) ----------------------------------------------
+
+# true : coi file .zip và .cbz như một thư mục ảo: ảnh/video bên trong được đưa vào archive
+#        mà KHÔNG giải nén ra đĩa. Khi xem, trình duyệt chỉ giải nén đúng file đang cần.
+# false: bỏ qua mọi file nén (tương đương tham số --no-zip).
+zip_support = true
+
+# Cách gom bài đối với media trong file nén:
+#   "folder"  : coi file nén như thư mục, gom bài theo tên file như bình thường (mặc định)
+#   "archive" : mỗi file nén là MỘT bài (hợp với truyện tranh .cbz: cả cuốn là một bài)
+zip_post_mode = "folder"
+
+# Bộ nhớ (MB) giữ lại cho ảnh đã giải nén nhưng đã cuộn đi (để cuộn ngược không phải giải nén lại).
+# Quá ngưỡng này, ảnh cũ nhất bị thu hồi (revoke Blob URL). Ảnh đang hiển thị luôn được giữ.
+# Giảm xuống (vd. 16) nếu xem file nén hàng GB trên máy ít RAM; 0 = thu hồi ngay khi rời khung nhìn.
+zip_cache_mb = 48
+
+# Thư viện unzipit (đọc zip trong trình duyệt):
+#  - Đặt file unzipit.module.js (hoặc unzipit.min.js) cạnh config.toml rồi build lại: script NHÚNG thẳng vào
+#    index.html, chạy được khi offline và khi mở bằng file://. Tự nhận tên unzipit.module.js, unzipit.min.js, unzipit.js.
+#    Tải về từ: https://cdn.jsdelivr.net/npm/unzipit@1.4.3/dist/unzipit.module.js
+#  - Không có file local thì trang tự tải từ CDN (chỉ khi thật sự cần xem ảnh trong file nén).
+# unzipit_path = "unzipit.module.js"
+# unzipit_url = "https://cdn.jsdelivr.net/npm/unzipit@1.4.3/dist/unzipit.module.js"
+
+# Lưu ý: mẫu trong ignored_folders cũng áp dụng cho thư mục BÊN TRONG file nén
+# và cho chính tên file nén (vd. "old_*.zip" hoặc "Thumbs").
 
 # --- Giao diện ----------------------------------------------------------------
 

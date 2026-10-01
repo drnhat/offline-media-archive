@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.2).
+"""Tumblr-style offline media archive builder (v3.3).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
 MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
@@ -27,14 +27,16 @@ import struct
 import time
 import tomllib
 import webbrowser
+import zipfile
 import zlib
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from html import escape as html_escape
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.2"
+VERSION = "3.3"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -103,6 +105,7 @@ ICONS = {
     "link": ("0 0 24 24", '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
     "minus": ("0 0 24 24", '<path d="M5 12h14"/>'),
     "plus": ("0 0 24 24", '<path d="M5 12h14"/><path d="M12 5v14"/>'),
+    "package": ("0 0 24 24", '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
     "bookmark": ("0 0 24 24", '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>'),
     "pencil": ("0 0 24 24", '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>'),
     "trash": ("0 0 24 24", '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>'),
@@ -233,11 +236,27 @@ class MediaFile(NamedTuple):
     size: int
     created: float
     mtime_ns: int
+    zip: tuple | None = None   # (đường dẫn file nén tương đối, đường dẫn bên trong, chỉ số entry) nếu media nằm trong .zip/.cbz
 
 
-def scan_folder(root: Path, ignore: IgnoreRules | None = None) -> tuple[list[MediaFile], dict[str, Path]]:
-    """Trả về (danh sách media đã sắp xếp tự nhiên, bảng ghi chú .md theo tên bỏ đuôi)."""
+class ArchiveFile(NamedTuple):
+    rel: str
+    path: Path
+    size: int
+    created: float
+    mtime_ns: int
+
+
+ZIP_EXTENSIONS = {".zip", ".cbz"}
+SUPPORTED_ZIP_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)   # unzipit chỉ giải nén được store + deflate
+UNZIPIT_CDN_URL = "https://cdn.jsdelivr.net/npm/unzipit@1.4.3/dist/unzipit.module.js"
+UNZIPIT_LOCAL_CANDIDATES = ("unzipit.module.js", "unzipit.module.min.js", "unzipit.min.js", "unzipit.js")
+
+
+def scan_folder(root: Path, ignore: IgnoreRules | None = None, zip_support: bool = False) -> tuple[list[MediaFile], dict[str, Path], list[ArchiveFile]]:
+    """Trả về (media sắp xếp tự nhiên, bảng ghi chú .md theo tên bỏ đuôi, danh sách file .zip/.cbz)."""
     media: list[MediaFile] = []
+    archives: list[ArchiveFile] = []
     notes: dict[str, Path] = {}
     visited: set[str] = set()
     stack: list[tuple[str, str]] = [(str(root), "")]
@@ -271,13 +290,19 @@ def scan_folder(root: Path, ignore: IgnoreRules | None = None) -> tuple[list[Med
                         media.append(MediaFile(rel, Path(entry.path), st.st_size, created_time(st), st.st_mtime_ns))
                     elif suffix == ".md":
                         notes[os.path.splitext(rel)[0].casefold()] = Path(entry.path)
+                    elif zip_support and suffix in ZIP_EXTENSIONS:
+                        if ignore is not None and ignore.matches(name, rel, entry.path):
+                            continue
+                        st = entry.stat()
+                        archives.append(ArchiveFile(rel, Path(entry.path), st.st_size, created_time(st), st.st_mtime_ns))
                 except OSError:
                     continue
     media.sort(key=lambda m: natural_key(m.rel))
-    return media, notes
+    archives.sort(key=lambda a: natural_key(a.rel))
+    return media, notes, archives
 
 
-def folder_has_media(root: Path, ignore: IgnoreRules | None = None) -> bool:
+def folder_has_media(root: Path, ignore: IgnoreRules | None = None, zip_support: bool = False) -> bool:
     """Kiểm tra nhanh (dừng ngay khi gặp file đầu tiên) xem thư mục có media không."""
     for current, dirs, files in os.walk(root):
         rel_current = os.path.relpath(current, root).replace(os.sep, "/")
@@ -291,20 +316,131 @@ def folder_has_media(root: Path, ignore: IgnoreRules | None = None) -> bool:
             kept.append(d)
         dirs[:] = kept
         for name in files:
-            if not name.startswith(".") and os.path.splitext(name)[1].casefold() in MEDIA_EXTENSIONS:
+            suffix = os.path.splitext(name)[1].casefold()
+            if not name.startswith(".") and (suffix in MEDIA_EXTENSIONS or (zip_support and suffix in ZIP_EXTENSIONS)):
                 return True
     return False
 
 
-def group_media(files: list[MediaFile]) -> list[tuple[str, list[MediaFile]]]:
-    """Gom các file cùng một bài. Khóa nhóm giữ nguyên như v2 để ID bài không đổi."""
+def group_media(files: list[MediaFile], zip_mode: str = "folder") -> list[tuple[str, list[MediaFile]]]:
+    """Gom các file cùng một bài. Khóa nhóm giữ nguyên như v2 để ID bài không đổi.
+    Media trong .zip/.cbz: zip_mode="folder" coi file nén như thư mục ảo (gom theo tên như file thường);
+    zip_mode="archive" gom MỌI media của một file nén thành một bài."""
     groups: dict[str, list[MediaFile]] = {}
     for media in files:
+        if media.zip is not None and zip_mode == "archive":
+            groups.setdefault(f"{media.zip[0]}::@archive", []).append(media)
+            continue
         group_id = image_group_id(posixpath.basename(media.rel)).casefold()
         parent = posixpath.dirname(media.rel) or "."
         key = f"{parent}::{group_id}" if parent != "." else group_id
         groups.setdefault(key, []).append(media)
     return list(groups.items())
+
+
+# --------------------------------------------------------------------------- #
+# File nén .zip/.cbz như thư mục ảo: chỉ đọc danh sách (không giải nén ra đĩa)
+# --------------------------------------------------------------------------- #
+def _zip_entry_name(info: zipfile.ZipInfo) -> str:
+    """Tên entry đã chuẩn hóa. Zip không bật cờ UTF-8 bị zipfile giải mã cp437 → thử khôi phục UTF-8 (trường hợp phổ biến)."""
+    name = info.filename
+    if not info.flag_bits & 0x800:
+        try:
+            name = name.encode("cp437").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return name.replace("\\", "/")
+
+
+def _zip_entry_time(info: zipfile.ZipInfo, fallback: float) -> float:
+    try:
+        return datetime(*info.date_time).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return fallback
+
+
+def list_archive_media(archive: ArchiveFile, ignore: IgnoreRules | None, warn) -> tuple[list[MediaFile], dict]:
+    """Liệt kê ảnh/video bên trong một .zip/.cbz. Đường dẫn ảo: "<file nén>/<đường dẫn bên trong>"."""
+    stats = {"encrypted": 0, "unsupported": 0, "bad": 0}
+    try:
+        with zipfile.ZipFile(archive.path) as handle:
+            infos = handle.infolist()
+    except (zipfile.BadZipFile, OSError, NotImplementedError, ValueError, RuntimeError, EOFError) as exc:
+        warn(f"Bỏ qua file nén {archive.rel}: {exc}")
+        stats["bad"] = 1
+        return [], stats
+    dir_cache: dict[str, bool] = {}
+
+    def dir_allowed(dirs: tuple[str, ...]) -> bool:
+        key = "/".join(dirs)
+        cached = dir_cache.get(key)
+        if cached is not None:
+            return cached
+        segment = dirs[-1]
+        allowed = not segment.startswith(".") and segment not in IGNORED_MEDIA_DIRS
+        if allowed and len(dirs) > 1:
+            allowed = dir_allowed(dirs[:-1])
+        if allowed and ignore is not None:
+            allowed = not ignore.matches(segment, f"{archive.rel}/{key}", f"{archive.path}/{key}")
+        dir_cache[key] = allowed
+        return allowed
+
+    media: list[MediaFile] = []
+    for index, info in enumerate(infos):
+        if info.is_dir():
+            continue
+        name = _zip_entry_name(info)
+        while name.startswith("./"):
+            name = name[2:]
+        parts = [p for p in name.split("/") if p]
+        if not parts or name.startswith("/") or ".." in parts:
+            continue
+        base = parts[-1]
+        if base.startswith(".") or os.path.splitext(base)[1].casefold() not in MEDIA_EXTENSIONS:
+            continue
+        if len(parts) > 1 and not dir_allowed(tuple(parts[:-1])):
+            continue
+        if info.flag_bits & 0x1:
+            stats["encrypted"] += 1
+            continue
+        if info.compress_type not in SUPPORTED_ZIP_METHODS:
+            stats["unsupported"] += 1
+            continue
+        internal = "/".join(parts)
+        media.append(MediaFile(f"{archive.rel}/{internal}", archive.path, info.file_size,
+                               _zip_entry_time(info, archive.created), archive.mtime_ns, (archive.rel, internal, index)))
+    if stats["encrypted"] or stats["unsupported"]:
+        warn(f"{archive.rel}: bỏ qua {stats['encrypted']} file có mật khẩu và {stats['unsupported']} file nén bằng phương pháp không hỗ trợ (chỉ hỗ trợ store/deflate).")
+    return media, stats
+
+
+def prepare_unzipit_script(source: str) -> str | None:
+    """Biến unzipit (ES module hoặc UMD) thành đoạn JS thường gán window.unzipit để nhúng inline.
+    Nhúng inline là cách duy nhất chạy được khi mở bằng file:// (trình duyệt chặn <script type=module src=file://…>).
+    Trả về None nếu file có cú pháp không chuyển được (khi đó dùng CDN)."""
+    text = source
+    if re.search(r"^\s*import\s|\bimport\.meta\b|\bimport\s*\(", text, re.M):
+        return None
+    if re.search(r"\bexport\s+(?:default|const|let|var|function|class|async)\b|\bexport\s*\*", text):
+        return None
+    lists = list(re.finditer(r"\bexport\s*\{([^}]*)\}\s*;?", text))
+    if lists:
+        pairs: list[tuple[str, str]] = []
+        for match in lists:
+            for part in match.group(1).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                parsed = re.fullmatch(r"(\w+)(?:\s+as\s+(\w+))?", part)
+                if not parsed:
+                    return None
+                pairs.append((parsed.group(2) or parsed.group(1), parsed.group(1)))
+        if not pairs:
+            return None
+        text = re.sub(r"\bexport\s*\{[^}]*\}\s*;?", "", text)
+        assign = "window.unzipit={" + ",".join(a if a == b else f"{a}:{b}" for a, b in pairs) + "};"
+        text = "(()=>{\n" + text + "\n" + assign + "\n})();"
+    return text.replace("</script", "<\\/script")
 
 
 # --------------------------------------------------------------------------- #
@@ -421,29 +557,60 @@ def _svg_size(handle) -> tuple[int, int] | None:
     return max(1, round(width / height * 1000)), 1000  # chỉ cần tỉ lệ
 
 
+def _probe_handle(handle, suffix: str) -> tuple[int, int] | None:
+    """Đọc kích thước từ một file-like (file thường hoặc entry trong zip)."""
+    try:
+        head = handle.read(32)
+        if head.startswith(b"\x89PNG\r\n\x1a\n") and head[12:16] == b"IHDR":
+            return struct.unpack(">II", head[16:24])
+        if head[:6] in (b"GIF87a", b"GIF89a"):
+            return struct.unpack("<HH", head[6:10])
+        if head[:2] == b"\xff\xd8":
+            return _jpeg_size(handle)
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            return _webp_size(handle)
+        if head[:2] == b"BM" and len(head) >= 26:
+            width, height = struct.unpack("<ii", head[18:26])
+            return abs(width), abs(height)
+        if head[4:8] == b"ftyp":
+            return _isobmff_size(handle)
+        if suffix == ".svg":
+            return _svg_size(handle)
+    except (OSError, struct.error, ValueError, EOFError, RuntimeError, NotImplementedError, zlib.error, zipfile.BadZipFile):
+        return None
+    return None
+
+
 def probe_size(path: Path) -> tuple[int, int] | None:
     """Kích thước hiển thị (đã tính xoay EXIF) hoặc None nếu không đọc được."""
     try:
         with open(path, "rb") as handle:
-            head = handle.read(32)
-            if head.startswith(b"\x89PNG\r\n\x1a\n") and head[12:16] == b"IHDR":
-                return struct.unpack(">II", head[16:24])
-            if head[:6] in (b"GIF87a", b"GIF89a"):
-                return struct.unpack("<HH", head[6:10])
-            if head[:2] == b"\xff\xd8":
-                return _jpeg_size(handle)
-            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-                return _webp_size(handle)
-            if head[:2] == b"BM" and len(head) >= 26:
-                width, height = struct.unpack("<ii", head[18:26])
-                return abs(width), abs(height)
-            if head[4:8] == b"ftyp":
-                return _isobmff_size(handle)
-            if path.suffix.casefold() == ".svg":
-                return _svg_size(handle)
-    except (OSError, struct.error, ValueError):
+            return _probe_handle(handle, path.suffix.casefold())
+    except OSError:
         return None
-    return None
+
+
+def media_key(media: MediaFile) -> str:
+    """Khóa duy nhất cho cache/kết quả kích thước (entry trong zip không trùng với file nén)."""
+    return str(media.path) if media.zip is None else f"{media.path}!/{media.zip[2]}:{media.zip[1]}"
+
+
+def _probe_zip_group(path: Path, items: list[MediaFile]) -> list[tuple[MediaFile, tuple[int, int] | None]]:
+    results: list[tuple[MediaFile, tuple[int, int] | None]] = []
+    try:
+        with zipfile.ZipFile(path) as handle:
+            infos = handle.infolist()
+            for media in items:
+                dims = None
+                try:
+                    with handle.open(infos[media.zip[2]]) as member:
+                        dims = _probe_handle(member, os.path.splitext(media.rel)[1].casefold())
+                except (OSError, IndexError, RuntimeError, NotImplementedError, zipfile.BadZipFile, zlib.error, EOFError):
+                    dims = None
+                results.append((media, dims))
+    except (zipfile.BadZipFile, OSError, NotImplementedError, ValueError, RuntimeError, EOFError):
+        return [(media, None) for media in items]
+    return results
 
 
 class SizeCache:
@@ -496,21 +663,29 @@ class SizeCache:
 def probe_media_sizes(files: list[MediaFile], cache: SizeCache, workers: int) -> dict[str, tuple[int, int]]:
     result: dict[str, tuple[int, int]] = {}
     todo: list[MediaFile] = []
+    todo_zip: dict[str, list[MediaFile]] = {}
     for media in files:
         if media_kind(media.rel) == KIND_VIDEO:
             continue
-        key = str(media.path)
+        key = media_key(media)
         hit = cache.lookup(key, media.size, media.mtime_ns)
         if hit is not None:
             result[key] = hit
-        else:
+        elif media.zip is None:
             todo.append(media)
-    if todo:
+        else:
+            todo_zip.setdefault(str(media.path), []).append(media)
+    if todo or todo_zip:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for media, dims in zip(todo, pool.map(lambda m: probe_size(m.path), todo)):
                 width, height = dims or (0, 0)
-                cache.store(str(media.path), media.size, media.mtime_ns, width, height)
-                result[str(media.path)] = (width, height)
+                cache.store(media_key(media), media.size, media.mtime_ns, width, height)
+                result[media_key(media)] = (width, height)
+            for group in pool.map(lambda item: _probe_zip_group(Path(item[0]), item[1]), todo_zip.items()):
+                for media, dims in group:
+                    width, height = dims or (0, 0)
+                    cache.store(media_key(media), media.size, media.mtime_ns, width, height)
+                    result[media_key(media)] = (width, height)
     return result
 
 
@@ -643,15 +818,18 @@ def prepare_app_icon(icon_path: Path | None, theme: dict, cache: SizeCache, warn
 # --------------------------------------------------------------------------- #
 # Ghi chú Markdown (bộ con an toàn: HTML thô luôn bị escape)
 # --------------------------------------------------------------------------- #
-def markdown_sidecar(filename: str, used: set[Path], by_stem: dict[str, Path]) -> Path | None:
+def markdown_sidecar(filename: str, used: set[Path], by_stem: dict[str, Path], archive_rel: str | None = None) -> Path | None:
     """Tìm ghi chú .md cùng tên với media (hoặc cùng tên nhóm bài). Thoát ngay nếu thư mục không có .md."""
     if not by_stem:
         return None
     parent, name = posixpath.split(filename)
     group_id = image_group_id(filename)
     group_stem = group_id[len("numeric-post-"):] if group_id.startswith("numeric-post-") else group_id
-    for stem in (os.path.splitext(name)[0], group_stem):
-        match = by_stem.get(posixpath.join(parent, stem).casefold())
+    keys = [posixpath.join(parent, stem).casefold() for stem in (os.path.splitext(name)[0], group_stem)]
+    if archive_rel:   # ghi chú đặt cạnh file nén: "album.cbz" ↔ "album.md"
+        keys.append(os.path.splitext(archive_rel)[0].casefold())
+    for key in keys:
+        match = by_stem.get(key)
         if match and match not in used:
             used.add(match)
             return match
@@ -751,13 +929,15 @@ DEFAULT_CONFIG: dict[str, object] = {
     "show_dimensions": False, "folder_filter_depth": 1, "default_view": "feed", "columns": 0,
     "feed_width": 720, "probe_dimensions": True, "video_autoplay": False,
     "ignored_folders": [], "app_icon": "", "app_name": "", "app_status_bar": "black-translucent",
+    "zip_support": True, "zip_post_mode": "folder", "unzipit_path": "", "unzipit_url": "", "zip_cache_mb": 48,
 }
 CONFIG_ALIASES = {
     "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
     "image_folders": "images_dirs", "folders": "images_dirs", "sort": "sort_by", "order": "sort_by",
     "view": "default_view", "layout": "default_view", "cols": "columns", "width": "feed_width",
     "autoplay": "video_autoplay", "ignore_folders": "ignored_folders", "exclude_folders": "ignored_folders",
-    "ignore": "ignored_folders", "exclude": "ignored_folders", "icon": "app_icon", "apple_touch_icon": "app_icon",
+    "ignore": "ignored_folders", "exclude": "ignored_folders", "zip": "zip_support", "archives": "zip_support",
+    "zip_mode": "zip_post_mode", "unzipit": "unzipit_path", "icon": "app_icon", "apple_touch_icon": "app_icon",
 }
 
 
@@ -1110,6 +1290,22 @@ body{background:radial-gradient(ellipse 70% 30rem at 50% -14rem,color-mix(in srg
 .site-header{padding-top:env(safe-area-inset-top,0px)}
 #toast{top:calc(15px + env(safe-area-inset-top,0px))}
 @media(display-mode:standalone){body{overscroll-behavior-y:none}}
+
+/* ---------- File nén (.zip / .cbz) ---------- */
+.feed:not(.grid) .post.zipped{content-visibility:visible}
+.post-zip{border-color:color-mix(in srgb,var(--peach) 40%,var(--surface1));background:color-mix(in srgb,var(--peach) 9%,var(--surface0))}
+.zip-need-btn{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px;border:1px dashed color-mix(in srgb,var(--mauve) 55%,var(--surface1));border-radius:var(--r-media);background:color-mix(in srgb,var(--crust) 72%,transparent);color:var(--text);font-size:13px;font-weight:650;text-align:center}
+.zip-need-btn .ic{width:28px;height:28px;color:var(--mauve)}
+.zip-need-btn:hover{background:color-mix(in srgb,var(--mauve) 16%,var(--crust))}
+.feed.grid .zip-need-btn span{display:none}
+.zip-play{position:absolute;left:50%;top:50%;z-index:2;display:grid;place-items:center;width:58px;height:58px;margin:-29px 0 0 -29px;padding:0;border:1px solid color-mix(in srgb,var(--surface1) 70%,transparent);border-radius:50%;background:color-mix(in srgb,var(--mantle) 76%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--text);font-size:22px}
+.zip-play .ic{fill:currentColor}
+.zip-play:hover{background:color-mix(in srgb,var(--mauve) 30%,var(--mantle))}
+.video-wrap:has(video[src]) .zip-play{display:none}
+.zip-drop{margin:12px 0;padding:14px;border:1px dashed var(--surface1);border-radius:14px;color:var(--subtext);font-size:12px;text-align:center}
+.lb-need{position:absolute;inset:0;z-index:2;display:grid;place-content:center;justify-items:center;gap:14px;padding:24px;text-align:center;color:var(--fg);font-size:14px}
+.lb-need .ic{width:40px;height:40px;color:var(--mauve)}
+.lb-need p{max-width:440px;margin:0}
 '''
 
 BODY = r'''</style>
@@ -1195,6 +1391,7 @@ __SPRITE__
     <label class="check"><input id="autoplayChk" type="checkbox"><span>Tự phát video (tắt tiếng) khi lướt tới</span></label>
     <label class="field">Thời gian mỗi ảnh khi trình chiếu<select id="slideSel"><option value="3">3 giây</option><option value="5">5 giây</option><option value="8">8 giây</option><option value="12">12 giây</option></select></label>
     <div class="menu-sep"></div>
+    <button class="item" id="zipBtn" type="button" hidden><span data-ic="package"></span>File nén (zip / cbz)…</button>
     <button class="item" id="backupBtn" type="button"><span data-ic="download"></span>Sao lưu &amp; khôi phục</button>
     <button class="item" id="helpBtn" type="button"><span data-ic="help"></span>Phím tắt &amp; trợ giúp</button>
   </div>
@@ -1202,6 +1399,7 @@ __SPRITE__
 <div id="toast" role="status" aria-live="polite"></div>
 
 <section id="lightbox" role="dialog" aria-modal="true" aria-label="Xem media phóng to" tabindex="-1">
+  <div class="lb-need" id="lbNeed" hidden><span data-ic="package"></span><p id="lbNeedMsg"></p><button class="btn primary" id="lbNeedBtn" type="button">Chọn file nén…</button></div>
   <div class="lb-stage" id="lbStage">
     <img id="lbImg" alt="" draggable="false">
     <video id="lbVideo" controls playsinline preload="metadata" hidden></video>
@@ -1233,6 +1431,18 @@ __SPRITE__
     <input id="searchQuery" type="search" maxlength="180" autocomplete="off" spellcheck="false" placeholder="Số bài, tên file, ghi chú…  (is:video · is:gif · is:multi · is:liked · is:note)">
     <div class="search-tools"><div class="search-count" id="searchCount" aria-live="polite"></div><button class="btn primary" id="searchApply" type="button" title="Chỉ hiện các bài khớp trong danh sách chính (Shift+Enter)"><span data-ic="filter"></span><span id="searchApplyLbl">Lọc danh sách</span></button></div>
     <div class="search-results" id="searchResults"></div>
+  </div>
+</section>
+
+<section class="overlay" id="zipDlg" role="dialog" aria-modal="true" aria-labelledby="zipTitle">
+  <div class="sheet" style="width:min(640px,100%)">
+    <div class="sheet-head"><div><h2 id="zipTitle">File nén (zip / cbz)</h2><p>Ảnh/video bên trong được giải nén từng file một khi cần xem, không giải nén cả file nén.</p></div><button class="x-btn" id="zipClose" type="button" aria-label="Đóng"><span data-ic="x"></span></button></div>
+    <p class="hint" id="zipMode"></p>
+    <div class="btn-row" style="margin-top:0"><button class="btn primary" id="zipPickFilesBtn" type="button"><span data-ic="package"></span>Chọn file nén…</button><button class="btn" id="zipPickDirBtn" type="button"><span data-ic="folder"></span>Chọn thư mục chứa…</button></div>
+    <div class="zip-drop" id="zipDrop">Hoặc kéo-thả các file .zip / .cbz vào trang</div>
+    <div class="saved-list" id="zipList"></div>
+    <input type="file" id="zipPickFiles" accept=".zip,.cbz,application/zip,application/vnd.comicbook+zip" multiple hidden>
+    <input type="file" id="zipPickDir" webkitdirectory multiple hidden>
   </div>
 </section>
 
@@ -1273,6 +1483,7 @@ __SPRITE__
         <div class="sc"><span><b>Tìm / nhảy tới bài</b><small>Số bài, tên file, ghi chú, is:video…</small></span><kbd>G</kbd></div>
         <div class="sc"><span><b>Lọc danh sách theo tìm kiếm</b><small>Chỉ xem các bài khớp · Esc để bỏ lọc</small></span><kbd>⇧ Enter</kbd></div>
         <div class="sc"><span><b>Thích / lọc bài đã thích</b><small>Lưu bài yêu thích</small></span><kbd>L</kbd><kbd>F</kbd></div>
+        <div class="sc"><span><b>Tìm trong file nén</b><small>Gõ is:zip để chỉ xem bài nằm trong .zip / .cbz</small></span></div>
         <div class="sc"><span><b>Bộ lọc đã lưu</b><small>Lưu, áp dụng, đổi tên, xóa</small></span><kbd>B</kbd></div>
         <div class="sc"><span><b>Đổi bố cục</b><small>Danh sách ⇄ lưới masonry</small></span><kbd>V</kbd></div>
         <div class="sc"><span><b>Đổi theme</b><small>Chọn giao diện màu</small></span><kbd>M</kbd></div>
@@ -1291,6 +1502,7 @@ __SPRITE__
       <li>Lưới masonry cân cột thật, chọn số cột; ảnh có kích thước sẵn nên trang không bị nhảy khi tải.</li>
       <li>Xem ảnh: phóng to/kéo, chụm 2 ngón, trình chiếu, toàn màn hình, tải xuống, bảng thông tin, tải trước ảnh kế bên.</li>
       <li>Tìm kiếm có toán tử (is:video, is:gif, is:multi, is:liked, is:note), duyệt bằng phím mũi tên.</li>
+      <li>Mới ở 3.3: xem trực tiếp ảnh/video trong file <b>.zip / .cbz</b> như thư mục ảo (giải nén từng file khi cần bằng unzipit, tự giải phóng bộ nhớ).</li>
       <li>Mới ở 3.2: <b>bộ lọc đã lưu</b> (thêm, xóa, đổi tên, có trong file sao lưu), icon Màn hình chính iOS, loại trừ thư mục khi quét.</li>
       <li>Mới ở 3.1: nút <b>Lọc danh sách</b> (Shift+Enter) chỉ hiện các bài khớp tìm kiếm, kèm thanh trạng thái để sửa hoặc bỏ lọc.</li>
       <li>Bài ngẫu nhiên, đảo thứ tự, thanh tiến độ, liên kết trực tiếp tới bài (#p123), nút Back đóng ảnh trên điện thoại.</li>
@@ -1300,9 +1512,10 @@ __SPRITE__
   </div>
 </section>
 
+__UNZIPIT_INLINE__
 <script>
 'use strict';
-const POSTS=__POSTS__,BASE=__BASE__,ARCHIVE_TITLE=__ARCHIVE_TITLE_JSON__,FLAGS=__FLAGS__,DEFAULTS=__DEFAULTS__;
+const POSTS=__POSTS__,BASE=__BASE__,ARCHIVES=__ARCHIVES__,ARCHIVE_TITLE=__ARCHIVE_TITLE_JSON__,FLAGS=__FLAGS__,DEFAULTS=__DEFAULTS__;
 const $=id=>document.getElementById(id);
 const VIDEO_RE=/\.(mp4|webm|mov|m4v|ogv)$/i,GIF_RE=/\.gif$/i;
 const kindOf=n=>VIDEO_RE.test(n)?2:GIF_RE.test(n)?1:0;
@@ -1354,7 +1567,7 @@ function makeCard(idx,grid){
   const p=POSTS[idx],multi=p.m.length>1,shown=[];
   for(let j=0;j<p.m.length;j++)if(typeFilter.has(p.k[j]))shown.push(j);
   if(!shown.length)return null;
-  const card=document.createElement('article');card.className='post'+(multi?' multi':'');card.dataset.idx=idx;card.id='p'+(idx+1);
+  const card=document.createElement('article');card.className='post'+(multi?' multi':'')+(p.z!=null?' zipped':'');card.dataset.idx=idx;card.id='p'+(idx+1);
   const on=liked.has(p.id);if(on)card.classList.add('is-liked-post');
   const head=document.createElement('div');head.className='post-head';
   const no=document.createElement('button');no.type='button';no.className='post-no';no.textContent='#'+(idx+1);no.title='Sao chép liên kết tới bài này';
@@ -1366,29 +1579,34 @@ function makeCard(idx,grid){
   let est=90,ar=1;
   const build=grid?[shown[0]]:shown;
   build.forEach((j,n)=>{
-    const [rel,w,h,size,ct]=p.m[j],kind=p.k[j],url=urlOf(rel),item=document.createElement('div');
+    const m=p.m[j],[rel,w,h,size,ct]=m,kind=p.k[j],url=urlOf(rel),item=document.createElement('div');
     item.className='media-item';item.dataset.j=j;
     if(n===0){ar=w&&h?clamp(w/h,.62,1.9):(kind===2?16/9:1);if(grid)item.style.setProperty('--ar',ar.toFixed(4))}
     if(multi&&!grid){const nn=document.createElement('span');nn.className='media-no';nn.textContent=`${j+1}/${p.m.length}`;item.append(nn)}
     if(kind===2){
       if(grid){
-        if(FLAGS.thumbs){const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='metadata';v.src=url+'#t=0.1';item.append(v)}else{const ph=document.createElement('div');ph.className='vid-ph';ph.innerHTML=ic('video');item.append(ph)}
+        if(FLAGS.thumbs&&!m[5]){const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='metadata';v.src=url+'#t=0.1';item.append(v)}else{const ph=document.createElement('div');ph.className='vid-ph';ph.innerHTML=ic('video');item.append(ph)}
         const pb=document.createElement('span');pb.className='play-badge';pb.innerHTML=ic('play');item.append(pb);
       }else{
         const wrap=document.createElement('div');wrap.className='video-wrap';
-        const v=document.createElement('video');v.controls=true;v.playsInline=true;v.preload=FLAGS.thumbs?'metadata':'none';v.src=FLAGS.thumbs?url+'#t=0.1':url;
+        const v=document.createElement('video');v.controls=true;v.playsInline=true;v.preload=FLAGS.thumbs&&!m[5]?'metadata':'none';if(!m[5])v.src=FLAGS.thumbs?url+'#t=0.1':url;
         v.setAttribute('aria-label',`Video của bài ${idx+1}`);if(prefs.autoplay){v.loop=true;v.muted=true}
         v.addEventListener('error',()=>toast('Không phát được video: '+baseName(rel)),{once:true});
-        if(prefs.autoplay&&videoIO)videoIO.observe(v);
+        if(m[5]){v.dataset.zp=idx;v.dataset.zj=j;v.dataset.zauto='0';v.dataset.name=baseName(rel);zipWatch(v)}else if(prefs.autoplay&&videoIO)videoIO.observe(v);
         const open=document.createElement('button');open.type='button';open.className='media-open';open.dataset.act='open';open.innerHTML=ic('full')+'Phóng to';open.setAttribute('aria-label','Mở video trong trình xem');
-        wrap.append(v,open);item.append(wrap);est+=Math.round(FEED_W()*9/16);
+        wrap.append(v,open);
+        if(m[5]){const zp=document.createElement('button');zp.type='button';zp.className='zip-play';zp.dataset.act='zplay';zp.setAttribute('aria-label','Giải nén và phát video');zp.innerHTML=ic('play');wrap.append(zp)}
+        item.append(wrap);est+=Math.round(FEED_W()*9/16);
       }
     }else{
       const img=document.createElement('img');img.decoding='async';img.alt=`Ảnh ${idx+1}${multi?`, media ${j+1}`:''}`;
       if(w&&h){img.width=w;img.height=h;est+=Math.min(FEED_W()*h/w,innerHeight*.82)}else{img.className='nodim';est+=420}
-      const first=idx===view[0]&&n===0;
-      if(first){img.fetchPriority='high'}else img.loading='lazy';
-      img.src=url;item.append(img);
+      if(m[5]){img.alt='';img.dataset.alt=`Ảnh ${idx+1}${multi?`, media ${j+1}`:''}`;img.dataset.zp=idx;img.dataset.zj=j;img.dataset.name=baseName(rel);zipWatch(img);item.append(img)}
+      else{
+        const first=idx===view[0]&&n===0;
+        if(first){img.fetchPriority='high'}else img.loading='lazy';
+        img.src=url;item.append(img);
+      }
     }
     if(!grid){
       const parts=[];if(FLAGS.created)parts.push(fmtDate(ct));if(FLAGS.filename)parts.push(baseName(rel));if(FLAGS.dims&&w&&h)parts.push(`${w}×${h}`);if(FLAGS.size)parts.push('Dung lượng: '+fmtSize(size));
@@ -1399,6 +1617,7 @@ function makeCard(idx,grid){
   });
   const foot=document.createElement('footer');foot.className='post-foot';
   if(p.s){const src=document.createElement('span');src.className='post-source';src.title='Thư mục: '+p.s;src.innerHTML=ic('folder');const t=document.createElement('span');t.textContent=p.s;src.append(t);foot.append(src)}
+  if(p.z!=null){const z=document.createElement('span');z.className='post-source post-zip';z.title='File nén: '+ARCHIVES[p.z][0];z.innerHTML=ic('package');const zt=document.createElement('span');zt.textContent=baseName(ARCHIVES[p.z][0]);z.append(zt);foot.append(z)}
   const actions=document.createElement('div');actions.className='post-actions';
   actions.innerHTML=`<button type="button" class="btn-locate" data-act="locate" aria-label="Mở bài này tại vị trí trong archive đầy đủ">Về vị trí gốc</button><button type="button" class="like" data-act="like" aria-label="Thích bài viết" aria-pressed="${on}">${ic('heart')}</button>`;
   actions.querySelector('.like').classList.toggle('is-liked',on);
@@ -1429,7 +1648,7 @@ function computeView(){
   view=out;viewPos.fill(-1);for(let i=0;i<out.length;i++)viewPos[out[i]]=i;
 }
 function rebuild(){
-  videoIO?.disconnect();
+  videoIO?.disconnect();releaseAllZipEls();
   feed.replaceChildren();cards.clear();cursor=0;measureFeedWidth();
   const grid=isGrid();feed.classList.toggle('grid',grid);
   if(grid){colN=calcCols();cols=[];colH=new Array(colN).fill(0);for(let i=0;i<colN;i++){const c=document.createElement('div');c.className='col';feed.append(c);cols.push(c)}}
@@ -1458,7 +1677,7 @@ function fillNearViewport(){
 }
 if('IntersectionObserver'in window)new IntersectionObserver(es=>{if(es.some(e=>e.isIntersecting))fillNearViewport()},{rootMargin:'1800px 0px'}).observe(sentinel);
 feed.addEventListener('load',e=>{if(e.target.tagName==='IMG')e.target.classList.add('loaded')},true);
-feed.addEventListener('error',e=>{const t=e.target;if(t.tagName==='IMG'){t.classList.add('broken','loaded');t.alt='Không tải được: '+decodeURIComponent(t.src.slice(t.src.lastIndexOf('/')+1))}},true);
+feed.addEventListener('error',e=>{const t=e.target;if(t.tagName==='IMG'){t.classList.add('broken','loaded');t.alt='Không tải được: '+(t.dataset.name||decodeURIComponent(t.src.slice(t.src.lastIndexOf('/')+1)))}},true);
 document.addEventListener('play',e=>{if(e.target.tagName==='VIDEO'&&e.target!==$('lbVideo'))document.querySelectorAll('video').forEach(v=>{if(v!==e.target&&!v.paused)v.pause()})},true);
 
 /* ---------- Tương tác trong feed (ủy quyền sự kiện) ---------- */
@@ -1468,6 +1687,8 @@ feed.addEventListener('click',e=>{
   if(act==='like'){toggleLike(p.id);const b=actEl;b.classList.remove('pop');void b.offsetWidth;b.classList.add('pop');return}
   if(act==='locate'){leaveLiked(idx);toast('Đã mở bài tại vị trí trong archive');return}
   if(act==='open'){openLightbox(idx,+actEl.closest('.media-item').dataset.j);return}
+  if(act==='zplay'){const v=actEl.parentElement.querySelector('video');if(v)zipPlay(v);return}
+  if(act==='zipneed'){openZipDlg(+actEl.dataset.ai);return}
   if(e.target.closest('.post-no')){const link=location.href.split('#')[0]+'#p'+(idx+1);copyText(link).then(ok=>toast(ok?`Đã sao chép liên kết bài ${idx+1}`:'Không sao chép được liên kết'));return}
   const item=e.target.closest('.media-item');
   if(item&&(e.target.tagName==='IMG'||(isGrid()&&!e.target.closest('.like'))))openLightbox(idx,+item.dataset.j);
@@ -1605,7 +1826,7 @@ const ENT={'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&#x27;':"'",'&#39;':"
 function buildIndex(){
   if(searchIndex)return;
   searchIndex=POSTS.map((p,i)=>{
-    const names=p.m.map(m=>baseName(m[0])).join(' ');
+    const names=p.m.map(m=>baseName(m[0])+(m[5]?' '+m[5][1]+' '+baseName(ARCHIVES[m[5][0]][0]):'')).join(' ');
     const notes=p.n?Object.values(p.n).map(h=>h.replace(/<[^>]+>/g,' ').replace(/&(?:amp|lt|gt|quot|#x27|#39);/g,m=>ENT[m])).join(' '):'';
     return `${i+1} ${p.id} ${names} ${p.f||''} ${notes}`.toLocaleLowerCase();
   });
@@ -1613,13 +1834,13 @@ function buildIndex(){
 function syncVV(){const v=window.visualViewport;if(!v)return;const r=document.documentElement.style;r.setProperty('--vv-height',v.height+'px');r.setProperty('--vv-top',v.offsetTop+'px')}
 syncVV();window.visualViewport?.addEventListener('resize',syncVV,{passive:true});window.visualViewport?.addEventListener('scroll',syncVV,{passive:true});
 function parseQuery(raw){
-  const q={text:[],kinds:0,multi:false,liked:false,note:false,num:null};
+  const q={text:[],kinds:0,multi:false,liked:false,note:false,zip:false,num:null};
   for(const tok of raw.toLocaleLowerCase().split(/\s+/).filter(Boolean)){
     if(tok==='is:video')q.kinds|=4;else if(tok==='is:gif')q.kinds|=2;else if(tok==='is:image'||tok==='is:photo')q.kinds|=1;
-    else if(tok==='is:multi')q.multi=true;else if(tok==='is:liked')q.liked=true;else if(tok==='is:note')q.note=true;
+    else if(tok==='is:zip'||tok==='is:cbz')q.zip=true;else if(tok==='is:multi')q.multi=true;else if(tok==='is:liked')q.liked=true;else if(tok==='is:note')q.note=true;
     else q.text.push(tok.replace(/^#/,''));
   }
-  if(q.text.length===1&&/^\d+$/.test(q.text[0])&&!q.kinds&&!q.multi&&!q.liked&&!q.note)q.num=Number(q.text[0]);
+  if(q.text.length===1&&/^\d+$/.test(q.text[0])&&!q.kinds&&!q.multi&&!q.liked&&!q.note&&!q.zip)q.num=Number(q.text[0]);
   return q;
 }
 /* Một vị từ dùng chung cho hộp tìm kiếm VÀ bộ lọc danh sách. */
@@ -1630,6 +1851,7 @@ function matchPost(i,q){
   if(q.multi&&p.m.length<2)return false;
   if(q.liked&&!liked.has(p.id))return false;
   if(q.note&&!p.n)return false;
+  if(q.zip&&p.z==null)return false;
   for(const t of q.text)if(!searchIndex[i].includes(t))return false;
   return true;
 }
@@ -1649,7 +1871,8 @@ function renderSearch(raw){
   shown.forEach((idx,n)=>{
     const p=POSTS[idx],b=document.createElement('button');b.type='button';b.className='s-item'+(n===searchSel?' sel':'');b.dataset.idx=idx;
     const vi=p.k.findIndex(k=>k!==2);
-    if(vi>=0){const t=document.createElement('img');t.className='s-thumb';t.loading='lazy';t.decoding='async';t.alt='';t.src=urlOf(p.m[vi][0]);t.addEventListener('error',()=>{const f=document.createElement('span');f.className='s-thumb';f.innerHTML=ic('image');t.replaceWith(f)},{once:true});b.append(t)}
+    if(vi>=0&&p.m[vi][5]){const t=document.createElement('span');t.className='s-thumb';t.innerHTML=ic('package');b.append(t)}
+    else if(vi>=0){const t=document.createElement('img');t.className='s-thumb';t.loading='lazy';t.decoding='async';t.alt='';t.src=urlOf(p.m[vi][0]);t.addEventListener('error',()=>{const f=document.createElement('span');f.className='s-thumb';f.innerHTML=ic('image');t.replaceWith(f)},{once:true});b.append(t)}
     else{const t=document.createElement('span');t.className='s-thumb';t.innerHTML=ic('video');b.append(t)}
     const tx=document.createElement('span');tx.className='s-text';
     const ti=document.createElement('span');ti.className='s-title';ti.textContent=`Bài ${idx+1} · ${p.m.length} media${liked.has(p.id)?' · ♥':''}`;
@@ -1691,9 +1914,195 @@ function openSearch(v){closeSettings();closeFilter();searchDlg.classList.add('ac
 function closeSearch(noFocus){searchDlg.classList.remove('active');if(!noFocus)$('jumpBtn').focus()}
 $('searchClose').onclick=()=>closeSearch();searchDlg.addEventListener('click',e=>{if(e.target===searchDlg)closeSearch()});
 
+/* ---------- File nén (.zip / .cbz) đọc bằng unzipit ----------
+   Mỗi file nén là một "thư mục ảo". Trình duyệt chỉ giải nén ĐÚNG entry đang cần thành Blob (URL.createObjectURL).
+   - Cache file nén đã mở (zipCache): mở một lần, dùng lại cho mọi ảnh trong đó (tối đa ZIP_MAX_OPEN file, LRU).
+   - Cache Blob URL có đếm tham chiếu (zblobs): cùng một ảnh dùng chung một Blob; hết người dùng thì revoke.
+   - Ảnh trong feed/lưới chỉ được giải nén khi cuộn tới gần, và nhả lại (revoke) khi cuộn đi xa.
+   - Lightbox nhả Blob ngay khi đổi ảnh/đóng (chỉ giữ tối đa 2 ảnh kế bên để chuyển ảnh mượt). */
+const ARCH_ON=ARCHIVES.length>0;
+const ZIP_MAX_OPEN=6;
+let ZIP_IDLE_CAP=((FLAGS.zip&&FLAGS.zip.cacheMB!=null)?FLAGS.zip.cacheMB:48)*1048576;   // zip_cache_mb: ngưỡng Blob "rảnh" được giữ lại để cuộn lại không phải giải nén lần nữa
+const MIME={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',apng:'image/apng',gif:'image/gif',webp:'image/webp',avif:'image/avif',bmp:'image/bmp',svg:'image/svg+xml',jxl:'image/jxl',heic:'image/heic',heif:'image/heif',mp4:'video/mp4',m4v:'video/x-m4v',mov:'video/quicktime',webm:'video/webm',ogv:'video/ogg'};
+const mimeOf=n=>MIME[n.slice(n.lastIndexOf('.')+1).toLowerCase()]||'application/octet-stream';
+const zipErr=(code,msg,ai)=>Object.assign(new Error(msg),{code,archive:ai});
+const zipFiles=new Map(),zipHttp=new Map(),zipCache=new Map(),zblobs=new Map(),zpend=new Map(),zipEls=new Set(),zipNeedToast=new Set();
+let zidleBytes=0,unzipitP=null,lastZipToast='',lastZipToastT=0;
+function zipToast(e){const msg='Không mở được file nén: '+((e&&e.message)||e),now=Date.now();if(msg===lastZipToast&&now-lastZipToastT<4000)return;lastZipToast=msg;lastZipToastT=now;toast(msg)}
+
+/* Nạp thư viện: ưu tiên bản nhúng sẵn trong HTML (build đã nhúng unzipit local → chạy cả khi offline / file://),
+   không có thì import() động từ CDN. Chỉ tải khi thật sự cần xem ảnh trong file nén. */
+function loadUnzipit(){
+  if(window.unzipit)return Promise.resolve(window.unzipit);
+  if(!unzipitP){
+    const url=FLAGS.zip&&FLAGS.zip.url;
+    unzipitP=import(url).then(mod=>{window.unzipit=mod;return mod}).catch(()=>{unzipitP=null;throw zipErr('NO_LIB','không tải được thư viện unzipit từ '+url+' (hãy kiểm tra mạng, hoặc đặt unzipit.module.js cạnh config.toml rồi build lại để nhúng sẵn)')});
+  }
+  return unzipitP;
+}
+/* Nguồn dữ liệu của một file nén: File người dùng đã chọn → HTTP (Range) → tải cả file → yêu cầu chọn file. */
+async function zipSource(ai,u){
+  const f=zipFiles.get(ai);if(f)return f;
+  if(location.protocol==='file:')throw zipErr('NEED_FILE','cần chọn file',ai);   // trình duyệt cấm fetch() tới file://
+  const [path,size]=ARCHIVES[ai],url=urlOf(path);let r;
+  try{r=await fetch(url,{headers:{Range:'bytes=0-0'}})}catch(e){throw zipErr('NEED_FILE','không đọc được qua mạng',ai)}
+  if(r.status===206){if(r.body)r.body.cancel().catch(()=>{});zipHttp.set(ai,true);return u.HTTPRangeReader?new u.HTTPRangeReader(url):url}
+  if(r.ok){
+    if(r.body)r.body.cancel().catch(()=>{});
+    toast(`Máy chủ không hỗ trợ Range — đang tải cả file ${fmtSize(size)}…`);
+    const full=await fetch(url);if(!full.ok)throw zipErr('HTTP','HTTP '+full.status+' khi tải '+url,ai);
+    const blob=await full.blob();zipHttp.set(ai,true);return blob;
+  }
+  throw zipErr('HTTP','HTTP '+r.status+' khi mở '+url,ai);
+}
+function getZip(ai){
+  let p=zipCache.get(ai);
+  if(p){zipCache.delete(ai);zipCache.set(ai,p);return p}
+  p=(async()=>{
+    const u=await loadUnzipit(),src=await zipSource(ai,u);let info;
+    try{info=await (u.unzipRaw?u.unzipRaw(src):u.unzip(src))}catch(e){throw zipErr('BAD_ZIP','file nén hỏng hoặc không đọc được ('+((e&&e.message)||e)+')',ai)}
+    return {entries:Array.isArray(info.entries)?info.entries:Object.values(info.entries)};
+  })();
+  zipCache.set(ai,p);p.catch(()=>{if(zipCache.get(ai)===p)zipCache.delete(ai)});
+  while(zipCache.size>ZIP_MAX_OPEN)zipCache.delete(zipCache.keys().next().value);   // LRU: bỏ file nén lâu không dùng nhất
+  return p;
+}
+async function extractZip(m){
+  const [ai,internal,zi]=m[5],z=await getZip(ai);
+  let ent=z.entries[zi];   // tra theo chỉ số (không phụ thuộc cách giải mã tên); lệch thì tra theo tên
+  if(!ent||(ent.name!==internal&&ent.size!==m[3]))ent=z.entries.find(e=>e.name===internal)||null;
+  if(!ent)throw zipErr('NOT_FOUND','không thấy “'+internal+'” trong '+baseName(ARCHIVES[ai][0]),ai);
+  try{return ent.blob?await ent.blob(mimeOf(internal)):new Blob([await ent.arrayBuffer()],{type:mimeOf(internal)})}
+  catch(e){throw zipErr('EXTRACT','không giải nén được “'+baseName(internal)+'” ('+((e&&e.message)||e)+')',ai)}
+}
+/* Lấy Blob URL cho một media trong file nén. Trả về tay cầm: {url, release({retain}), hold(ms)}. */
+async function acquireZip(m){
+  const key=m[5][0]+':'+m[5][2];let e=zblobs.get(key);
+  if(!e){
+    let pr=zpend.get(key);
+    if(!pr){
+      pr=extractZip(m).then(blob=>{const ent={key,url:URL.createObjectURL(blob),size:blob.size,refs:0,idle:false,idleAt:0,holdUntil:0};zblobs.set(key,ent);zpend.delete(key);return ent},err=>{zpend.delete(key);throw err});
+      zpend.set(key,pr);
+    }
+    e=await pr;
+  }
+  if(e.idle){e.idle=false;zidleBytes-=e.size}
+  e.refs++;let done=false;
+  return {url:e.url,size:e.size,key,
+    release(opt){if(done)return;done=true;zRelease(e,opt)},
+    hold(ms){e.holdUntil=Math.max(e.holdUntil,Date.now()+ms)}};
+}
+function zRelease(e,opt){
+  if(--e.refs>0)return;
+  if(opt&&opt.retain){e.idle=true;e.idleAt=Date.now();zidleBytes+=e.size;zTrim()}   // feed: giữ tạm để cuộn lại không phải giải nén lần nữa
+  else zDestroy(e);                                                                  // lightbox: thu hồi ngay
+}
+function zDestroy(e){
+  const wait=e.holdUntil-Date.now();
+  if(wait>0){setTimeout(()=>{if(e.refs===0&&zblobs.get(e.key)===e)zDestroy(e)},wait+50);return}
+  zRevoke(e);
+}
+function zRevoke(e){URL.revokeObjectURL(e.url);zblobs.delete(e.key);if(e.idle){zidleBytes-=e.size;e.idle=false}}
+function zTrim(){
+  if(zidleBytes<=ZIP_IDLE_CAP)return;
+  const idle=[...zblobs.values()].filter(x=>x.idle).sort((a,b)=>a.idleAt-b.idleAt);
+  for(const e of idle){if(zidleBytes<=ZIP_IDLE_CAP)break;if(e.holdUntil>Date.now())continue;zRevoke(e)}
+}
+
+/* Ảnh/video trong feed & lưới: chỉ giải nén khi nằm gần khung nhìn, nhả khi cuộn đi xa. */
+const zipIO='IntersectionObserver'in window?new IntersectionObserver(es=>{
+  for(const en of es){const el=en.target;
+    if(en.isIntersecting){el._want=true;if(!el._hold&&el.dataset.zauto!=='0')loadZipEl(el)}
+    else{el._want=false;unloadZipEl(el)}}
+},{rootMargin:'1400px 0px'}):null;
+function zipWatch(el){zipEls.add(el);if(zipIO)zipIO.observe(el);else{el._want=true;if(el.dataset.zauto!=='0')loadZipEl(el)}}
+async function loadZipEl(el){
+  if(el._hold||el._loading)return false;
+  const m=POSTS[+el.dataset.zp].m[+el.dataset.zj];el._loading=true;
+  try{
+    const h=await acquireZip(m);el._loading=false;
+    if(!el.isConnected||!el._want){h.release({retain:true});return false}
+    el._hold=h;el._need=false;const nb=el.closest('.media-item');if(nb){const b=nb.querySelector('.zip-need-btn');if(b)b.remove()}
+    if(el.tagName==='VIDEO'){el.src=h.url;el.load()}else{el.alt=el.dataset.alt||'';el.src=h.url}
+    return true;
+  }catch(e){
+    el._loading=false;
+    if(e.code==='NEED_FILE')zipNeedFile(el,e.archive);else{el.classList.add('broken','loaded');zipToast(e)}
+    return false;
+  }
+}
+function unloadZipEl(el){
+  const h=el._hold;if(!h)return;el._hold=null;
+  if(el.tagName==='VIDEO'){el.pause();el.removeAttribute('src');el.load()}else el.removeAttribute('src');
+  el.classList.remove('loaded');h.release({retain:true});
+}
+function releaseAllZipEls(){
+  if(zipIO)zipIO.disconnect();
+  for(const el of zipEls){el._want=false;const h=el._hold;if(h){el._hold=null;h.release({retain:true})}}
+  zipEls.clear();
+}
+async function zipPlay(v){v._want=true;if(await loadZipEl(v)){try{await v.play()}catch(e){}}}
+function zipNeedFile(el,ai){
+  el._need=true;const item=el.closest('.media-item');
+  if(item&&!item.querySelector('.zip-need-btn')){
+    const b=document.createElement('button');b.type='button';b.className='zip-need-btn';b.dataset.act='zipneed';b.dataset.ai=ai;
+    b.innerHTML=ic('package');const t=document.createElement('span');t.textContent=`Chọn file “${baseName(ARCHIVES[ai][0])}” để xem`;b.append(t);item.append(b);
+  }
+  if(!zipNeedToast.has(ai)){zipNeedToast.add(ai);toast(`Cần chọn file “${baseName(ARCHIVES[ai][0])}” (bấm vào ô xám để chọn)`)}
+}
+
+/* Hộp thoại chọn file nén: bắt buộc khi mở bằng file://, dùng được cả khi kéo-thả. */
+const zipDlg=$('zipDlg');
+function zipStatus(ai){return zipFiles.has(ai)?'Đã chọn file':zipHttp.get(ai)?'Đọc qua máy chủ (HTTP)':'Chưa có file'}
+function renderZipDlg(){
+  $('zipMode').textContent=location.protocol==='file:'
+    ?'Bạn đang mở trang bằng file:// — trình duyệt không cho trang tự đọc file trên máy, nên hãy chọn (hoặc kéo-thả) các file nén bên dưới. Lựa chọn chỉ có hiệu lực trong phiên này. Mẹo: mở trang qua máy chủ web (ví dụ python -m http.server) để tự đọc, không cần chọn.'
+    :'Đang mở qua HTTP: trang tự đọc các file nén từ máy chủ (nếu máy chủ hỗ trợ Range thì chỉ tải phần cần thiết). Chỉ cần chọn file thủ công khi đọc tự động không được.';
+  const list=$('zipList');list.replaceChildren();
+  ARCHIVES.forEach(([path,size,count],ai)=>{
+    const ok=zipFiles.has(ai)||zipHttp.get(ai),row=document.createElement('div');row.className='saved-item'+(ok?' on':'');
+    const box=document.createElement('div');box.className='saved-apply';const b=document.createElement('b');b.textContent=baseName(path);
+    const sm=document.createElement('small');const d=document.createElement('span');d.className='desc';d.textContent=path;const c=document.createElement('span');c.className='cnt';c.textContent=` · ${fmtSize(size)} · ${count} media · ${zipStatus(ai)}`;sm.append(d,c);
+    box.append(b,sm);row.append(box);list.append(row);
+  });
+}
+function openZipDlg(){closeSettings();closeFilter();renderZipDlg();zipDlg.classList.add('active')}
+function closeZipDlg(){zipDlg.classList.remove('active')}
+function registerZipFiles(files){
+  const list=[...files].filter(f=>/\.(zip|cbz)$/i.test(f.name));let n=0;
+  ARCHIVES.forEach(([path,size],ai)=>{
+    const bn=baseName(path).toLowerCase(),named=list.filter(f=>f.name.toLowerCase()===bn);if(!named.length)return;
+    let pick=named.filter(f=>f.size===size);
+    if(pick.length>1)pick=pick.filter(f=>(f.webkitRelativePath||'').toLowerCase().endsWith(path.toLowerCase().split('/').slice(-2).join('/'))).concat(pick);
+    const file=(pick.length?pick:named)[0];
+    if(file.size!==size)toast(`“${file.name}” có dung lượng khác lúc build — vẫn thử đọc`);
+    zipFiles.set(ai,file);zipCache.delete(ai);zipNeedToast.delete(ai);n++;
+  });
+  return n;
+}
+function zipRetry(){
+  zipEls.forEach(el=>{if(el._need){el._need=false;const nb=el.closest('.media-item'),b=nb&&nb.querySelector('.zip-need-btn');if(b)b.remove();if(el._want)loadZipEl(el)}});
+  if(lb.open&&lb.needAi!=null)updateLightbox();
+}
+function onZipFiles(files){
+  const n=registerZipFiles(files);
+  if(zipDlg.classList.contains('active'))renderZipDlg();
+  if(n){toast(`Đã nhận ${n} file nén`);zipRetry()}else toast('Không có file nào khớp với các file nén của archive này');
+}
+if(ARCH_ON){
+  $('zipBtn').hidden=false;$('zipBtn').onclick=openZipDlg;$('zipClose').onclick=closeZipDlg;
+  zipDlg.addEventListener('click',e=>{if(e.target===zipDlg)closeZipDlg()});
+  $('zipPickFilesBtn').onclick=()=>$('zipPickFiles').click();
+  if(!('webkitdirectory'in $('zipPickDir')))$('zipPickDirBtn').hidden=true;else $('zipPickDirBtn').onclick=()=>$('zipPickDir').click();
+  $('zipPickFiles').addEventListener('change',e=>{const f=[...e.target.files];e.target.value='';if(f.length)onZipFiles(f)});
+  $('zipPickDir').addEventListener('change',e=>{const f=[...e.target.files];e.target.value='';if(f.length)onZipFiles(f)});
+  addEventListener('dragover',e=>{if(e.dataTransfer&&[...e.dataTransfer.types].includes('Files'))e.preventDefault()});
+  addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){e.preventDefault();onZipFiles(e.dataTransfer.files)}});
+}else{$('zipBtn').remove()}
+
 /* ---------- Xem ảnh phóng to ---------- */
 const lightbox=$('lightbox'),lbStage=$('lbStage'),lbImg=$('lbImg'),lbVideo=$('lbVideo'),lbInfo=$('lbInfo');
-const lb={open:false,list:[],i:0,scale:1,tx:0,ty:0,slide:false,slideT:0,idleT:0,pushed:false,skipPop:false,token:0,info:false};
+const lb={open:false,list:[],i:0,scale:1,tx:0,ty:0,slide:false,slideT:0,idleT:0,pushed:false,skipPop:false,token:0,info:false,hold:null,holdKind:-1,needAi:null,pre:new Map()},lbNeed=$('lbNeed');
 const code2=c=>[Math.floor(c/4096),c%4096];
 function openLightbox(idx,j){
   const list=[];for(const pi of view){const p=POSTS[pi];for(let m=0;m<p.m.length;m++)if(typeFilter.has(p.k[m]))list.push(pi*4096+m)}
@@ -1705,7 +2114,11 @@ function openLightbox(idx,j){
   updateLightbox();lightbox.focus({preventScroll:true});wake();
 }
 function closeLightbox(fromPop){
-  if(!lb.open)return;lb.open=false;lbVideo.pause();lightbox.classList.remove('active','idle','loading');document.documentElement.classList.remove('lb-open');
+  if(!lb.open)return;lb.open=false;lbVideo.pause();lightbox.classList.remove('active','idle','loading');
+  lb.token++;lbNeed.hidden=true;lb.needAi=null;   // huỷ mọi tác vụ giải nén đang chờ và nhả toàn bộ Blob của lightbox
+  if(lb.hold){lb.hold.release();lb.hold=null;lb.holdKind=-1}
+  lbVideo.removeAttribute('src');lbVideo.load();delete lbVideo.dataset.src;lbImg.removeAttribute('src');
+  for(const slot of lb.pre.values())if(slot.h)slot.h.release();lb.pre.clear();document.documentElement.classList.remove('lb-open');
   lb.slide=false;syncSlideBtn();clearTimeout(lb.slideT);clearTimeout(lb.idleT);lbInfo.hidden=true;lb.info=false;$('lbInfoBtn').classList.remove('on');
   if(document.fullscreenElement||document.webkitFullscreenElement)(document.exitFullscreen||document.webkitExitFullscreen).call(document);
   if(lb.pushed&&!fromPop){lb.pushed=false;lb.skipPop=true;history.back()}else lb.pushed=false;
@@ -1723,30 +2136,78 @@ function zoomAt(s,cx,cy){
 const zoomCenter=f=>zoomAt(lb.scale*f,lbStage.clientWidth/2,lbStage.clientHeight/2);
 const toggleZoom=(x,y)=>zoomAt(lb.scale>1.05?1:2.5,x,y);
 function updateLightbox(){
-  const [idx,j]=code2(lb.list[lb.i]),p=POSTS[idx],[rel,w,h,size,ct]=p.m[j],kind=p.k[j],url=urlOf(rel),name=baseName(rel);
+  const [idx,j]=code2(lb.list[lb.i]),p=POSTS[idx],m=p.m[j],[rel,w,h,size,ct]=m,kind=p.k[j],name=baseName(rel),zipped=!!m[5];
   resetZoom();lbVideo.pause();clearTimeout(lb.slideT);
-  const tok=++lb.token;
-  if(kind===2){
-    lbImg.hidden=true;lbVideo.hidden=false;lightbox.classList.remove('loading');
-    if(lbVideo.dataset.src!==url){lbVideo.dataset.src=url;lbVideo.src=url;lbVideo.load()}
+  const tok=++lb.token,prev=lb.hold,prevKind=lb.holdKind;lb.hold=null;lb.holdKind=-1;lb.needAi=null;lbNeed.hidden=true;
+  const freePrev=()=>{if(prev)prev.release()};   // release() chỉ có tác dụng một lần
+  if(prev&&prevKind===2){lbVideo.removeAttribute('src');lbVideo.load();delete lbVideo.dataset.src;freePrev()}   // video: nhả Blob ngay
+  const dl=$('lbDl'),op=$('lbOpen');
+  if(zipped){
+    lightbox.classList.add('loading');dl.removeAttribute('href');op.removeAttribute('href');dl.setAttribute('download',name);
+    if(kind===2){lbImg.hidden=true;lbVideo.hidden=false}else{lbVideo.hidden=true;lbImg.hidden=false;lbImg.classList.add('loading')}
+    openZipInLightbox(m,kind,tok,name,freePrev);
   }else{
-    lbVideo.hidden=true;lbImg.hidden=false;lbImg.classList.add('loading');lightbox.classList.add('loading');
-    lbImg.onload=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading')}};
-    lbImg.onerror=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading');toast('Không tải được ảnh')}};
-    lbImg.alt=name;lbImg.src=url;
+    const url=urlOf(rel);
+    if(kind===2){
+      lbImg.hidden=true;lbVideo.hidden=false;lightbox.classList.remove('loading');
+      if(lbVideo.dataset.src!==url){lbVideo.dataset.src=url;lbVideo.src=url;lbVideo.load()}
+    }else{
+      lbVideo.hidden=true;lbImg.hidden=false;lbImg.classList.add('loading');lightbox.classList.add('loading');
+      lbImg.onload=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading')}};
+      lbImg.onerror=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading');toast('Không tải được ảnh')}};
+      lbImg.alt=name;lbImg.src=url;
+    }
+    freePrev();dl.href=url;dl.setAttribute('download',name);op.href=url;
   }
   $('lbCount').textContent=`Bài ${idx+1}/${POSTS.length} · ${lb.i+1}/${lb.list.length}`;
-  $('lbName').textContent=name;$('lbDl').href=url;$('lbDl').setAttribute('download',name);$('lbOpen').href=url;
+  $('lbName').textContent=name;
   $('lbZoomIn').hidden=$('lbZoomOut').hidden=kind===2;
   syncLbLike();if(lb.info)renderInfo();
-  for(const d of [1,-1]){const n=lb.list[(lb.i+d+lb.list.length)%lb.list.length],[ni,nj]=code2(n);if(POSTS[ni].k[nj]!==2){const im=new Image();im.decoding='async';im.src=urlOf(POSTS[ni].m[nj][0])}}
+  for(const d of [1,-1]){const n=lb.list[(lb.i+d+lb.list.length)%lb.list.length],[ni,nj]=code2(n);if(!POSTS[ni].m[nj][5]&&POSTS[ni].k[nj]!==2){const im=new Image();im.decoding='async';im.src=urlOf(POSTS[ni].m[nj][0])}}
+  syncLbPreload();
   slideTick();
 }
+async function openZipInLightbox(m,kind,tok,name,freePrev){
+  let hold;
+  try{hold=await acquireZip(m)}
+  catch(e){
+    freePrev();if(tok!==lb.token||!lb.open)return;
+    lightbox.classList.remove('loading');lbImg.classList.remove('loading');lbImg.hidden=lbVideo.hidden=true;
+    if(e.code==='NEED_FILE'){lb.needAi=e.archive;$('lbNeedMsg').textContent=`Cần chọn file “${baseName(ARCHIVES[e.archive][0])}” để xem ảnh/video bên trong (trình duyệt không tự đọc được file trên máy khi mở bằng file://).`;lbNeed.hidden=false}
+    else zipToast(e);
+    return;
+  }
+  if(tok!==lb.token||!lb.open){hold.release();freePrev();return}
+  lb.hold=hold;lb.holdKind=kind;
+  $('lbDl').href=hold.url;$('lbOpen').href=hold.url;
+  if(kind===2){lbVideo.dataset.src=hold.url;lbVideo.src=hold.url;lbVideo.load();lightbox.classList.remove('loading')}
+  else{
+    lbImg.onload=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading')}};
+    lbImg.onerror=()=>{if(tok===lb.token){lbImg.classList.remove('loading');lightbox.classList.remove('loading');toast('Không hiển thị được ảnh trong file nén')}};
+    lbImg.alt=name;lbImg.src=hold.url;
+  }
+  freePrev();   // Blob của ảnh trước chỉ được thu hồi SAU khi ảnh mới đã gán
+}
+/* Tải trước ảnh kế bên (chỉ ảnh nhỏ hơn 40 MB trong file nén); tối đa 2 Blob phụ, tự nhả khi không còn kế bên. */
+function syncLbPreload(){
+  const cur=lb.list[lb.i],[ci,cj]=code2(cur),cm=POSTS[ci].m[cj],curKey=cm[5]?cm[5][0]+':'+cm[5][2]:'',want=new Map();
+  for(const d of [1,-1]){const n=lb.list[(lb.i+d+lb.list.length)%lb.list.length],[ni,nj]=code2(n),nm=POSTS[ni].m[nj];
+    if(nm[5]&&POSTS[ni].k[nj]!==2&&nm[3]<=40*1048576){const k=nm[5][0]+':'+nm[5][2];if(k!==curKey)want.set(k,nm)}}
+  for(const [k,slot] of [...lb.pre]){if(!want.has(k)){if(slot.h)slot.h.release();lb.pre.delete(k)}}
+  for(const [k,nm] of want){
+    if(lb.pre.has(k))continue;const slot={h:null};lb.pre.set(k,slot);
+    acquireZip(nm).then(h=>{if(!lb.open||lb.pre.get(k)!==slot){h.release();return}slot.h=h}).catch(()=>{if(lb.pre.get(k)===slot)lb.pre.delete(k)});
+  }
+}
+$('lbDl').addEventListener('click',()=>{if(lb.hold)lb.hold.hold(120000)});   // giữ Blob thêm 2 phút để tải xuống/mở tab kịp hoàn tất
+$('lbOpen').addEventListener('click',()=>{if(lb.hold)lb.hold.hold(120000)});
+$('lbNeedBtn').onclick=()=>openZipDlg(lb.needAi);
 function syncLbLike(){const [idx]=code2(lb.list[lb.i]),on=liked.has(POSTS[idx].id),b=$('lbLike');b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on))}
 function moveLb(d){if(!lb.list.length)return;lb.i=(lb.i+d+lb.list.length)%lb.list.length;updateLightbox()}
 function renderInfo(){
   const [idx,j]=code2(lb.list[lb.i]),p=POSTS[idx],[rel,w,h,size,ct]=p.m[j];
   const rows=[['Tên file',baseName(rel)],['Đường dẫn',rel],['Bài',`#${idx+1} · media ${j+1}/${p.m.length}`]];
+  const zm=p.m[j][5];if(zm)rows.splice(2,0,['File nén gốc',ARCHIVES[zm[0]][0]],['Đường dẫn trong file nén',zm[1]],['Dung lượng file nén',fmtSize(ARCHIVES[zm[0]][1])]);
   if(w&&h)rows.push(['Kích thước ảnh',`${w} × ${h} px`]);rows.push(['Dung lượng',fmtSize(size)],['Ngày tạo',fmtDate(ct)]);if(p.f)rows.push(['Thư mục',p.f]);
   lbInfo.replaceChildren(...rows.map(([k,v])=>{const r=document.createElement('div');r.className='lb-row';const a=document.createElement('span');a.textContent=k;const b=document.createElement('b');b.textContent=v;r.append(a,b);return r}));
   const note=p.n&&p.n[j];if(note){const n=document.createElement('div');n.className='media-note';n.style.marginTop='10px';n.innerHTML=note;lbInfo.append(n)}
@@ -1836,6 +2297,7 @@ document.addEventListener('keydown',e=>{
   if(searchDlg.classList.contains('active')){if(k==='Escape'){closeSearch();e.preventDefault()}return}
   if(backupDlg.classList.contains('active')){if(k==='Escape'){closeBackup();e.preventDefault()}return}
   if(savedDlg.classList.contains('active')){if(k==='Escape'){closeSaved();e.preventDefault()}return}
+  if(zipDlg.classList.contains('active')){if(k==='Escape'){closeZipDlg();e.preventDefault()}return}
   const tag=document.activeElement&&document.activeElement.tagName;
   if(['INPUT','TEXTAREA','SELECT'].includes(tag)||document.activeElement.isContentEditable){if(k==='Escape'){document.activeElement.blur();closeFilter();closeSettings()}return}
   if(lb.open){
@@ -2036,6 +2498,11 @@ class Options(NamedTuple):
     app_icon: str
     app_name: str
     app_status_bar: str
+    zip_support: bool
+    zip_post_mode: str
+    unzipit_path: str
+    unzipit_url: str
+    zip_cache_mb: int
 
 
 def render_sprite() -> str:
@@ -2051,7 +2518,25 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
     output_dir = output.parent.resolve()
     t0 = time.perf_counter()
     ignore = IgnoreRules(opts.ignored_folders)
-    scans = [(folder, *scan_folder(folder, ignore)) for folder in images_dirs]
+    raw_scans = [(folder, *scan_folder(folder, ignore, opts.zip_support)) for folder in images_dirs]
+    warn = lambda msg: print("Cảnh báo: " + msg, file=sys.stderr)
+    scans = []
+    archive_table: list[list] = []          # [đường dẫn file nén (tương đối với HTML), dung lượng, số media bên trong]
+    archive_index: dict[tuple[Path, str], int] = {}
+    zip_problems = 0
+    for folder, media, notes_by_stem, archives in raw_scans:
+        combined = list(media)
+        root_rel_for_zip = relative_media_root(folder, output_dir)
+        for archive in archives:
+            items, zstats = list_archive_media(archive, ignore, warn)
+            zip_problems += zstats["bad"] + zstats["encrypted"] + zstats["unsupported"]
+            if items:
+                archive_index[(folder, archive.rel)] = len(archive_table)
+                archive_table.append([posixpath.normpath(posixpath.join(root_rel_for_zip, archive.rel)), archive.size, len(items)])
+                combined.extend(items)
+        if archives:
+            combined.sort(key=lambda m: natural_key(m.rel))
+        scans.append((folder, combined, notes_by_stem))
     t_scan = time.perf_counter() - t0
 
     sizes: dict[str, tuple[int, int]] = {}
@@ -2080,14 +2565,18 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
         root_rel = relative_media_root(folder, output_dir)
         folder_key = natural_key(root_rel)
         used_notes: set[Path] = set()
-        for group_key, files in group_media(media):
+        for group_key, files in group_media(media, opts.zip_post_mode):
             post_id = f"{root_rel}::{group_key}" if multi_root else group_key
             items, notes = [], {}
             for position, mf in enumerate(files):
                 out_rel = posixpath.normpath(posixpath.join(root_rel, mf.rel))
-                width, height = sizes.get(str(mf.path), (0, 0))
-                items.append([out_rel, width, height, mf.size, int(mf.created)])
-                note_path = markdown_sidecar(mf.rel, used_notes, notes_by_stem)
+                width, height = sizes.get(media_key(mf), (0, 0))
+                item = [out_rel, width, height, mf.size, int(mf.created)]
+                if mf.zip is not None:
+                    # Metadata file nén: [chỉ số trong ARCHIVES (đường dẫn file nén gốc), đường dẫn bên trong, chỉ số entry]
+                    item.append([archive_index[(folder, mf.zip[0])], mf.zip[1], mf.zip[2]])
+                items.append(item)
+                note_path = markdown_sidecar(mf.rel, used_notes, notes_by_stem, mf.zip[0] if mf.zip else None)
                 if note_path is not None:
                     try:
                         text = note_path.read_text(encoding="utf-8", errors="replace")[:2_000_000]
@@ -2100,6 +2589,8 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
             if opts.folder_filter_depth > 0 and parent_parts:
                 bucket += "/" + "/".join(parent_parts.split("/")[:opts.folder_filter_depth])
             post = {"id": post_id, "m": items, "f": bucket}
+            if files[0].zip is not None:
+                post["z"] = archive_index[(folder, files[0].zip[0])]
             if notes:
                 post["n"] = notes
             if multi_root:
@@ -2119,7 +2610,8 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
     else:
         entries.sort(key=lambda e: (e["created"], e["nk_name"], e["nk_folder"]), reverse=True)
     stats = {"scan": t_scan, "probe": t_probe, "skipped_dirs": ignore.skipped, "media": sum(len(e["names"]) for e in entries),
-             "unknown_dims": sum(1 for e in entries for m in e["post"]["m"] if not m[1] and media_kind(m[0]) != KIND_VIDEO)}
+             "unknown_dims": sum(1 for e in entries for m in e["post"]["m"] if not m[1] and media_kind(m[0]) != KIND_VIDEO),
+             "archives": archive_table, "zip_entries": sum(row[2] for row in archive_table), "zip_problems": zip_problems}
     return entries, stats
 
 
@@ -2132,6 +2624,32 @@ __APP_META__
 <title>__ARCHIVE_TITLE__</title>__FAVICON_LINK__
 <style>
 """
+
+
+def find_local_unzipit(opts: Options, dirs: list[Path], warn) -> str | None:
+    """Tìm unzipit cục bộ để nhúng inline (chạy được cả khi mở bằng file:// và khi offline)."""
+    if opts.unzipit_path:
+        given = Path(opts.unzipit_path).expanduser()
+        candidates = [given] if given.is_absolute() else [d / given for d in dirs]
+        if not any(c.is_file() for c in candidates):
+            warn(f"Không tìm thấy unzipit_path: {opts.unzipit_path} — sẽ tải unzipit từ CDN khi cần.")
+            return None
+    else:
+        candidates = [d / name for d in dirs for name in UNZIPIT_LOCAL_CANDIDATES]
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            source = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            warn(f"Không đọc được {candidate.name}: {exc}")
+            continue
+        script = prepare_unzipit_script(source)
+        if script is None:
+            warn(f"Không nhúng được {candidate.name} (cú pháp không chuyển được sang script thường) — sẽ tải unzipit từ CDN khi cần.")
+            return None
+        return script
+    return None
 
 
 def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_dir: Path, log=print, icon_base: Path | None = None) -> tuple[int, dict]:
@@ -2171,6 +2689,15 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
                 f'<meta name="format-detection" content="telephone=no">'
                 f'<link rel="apple-touch-icon" sizes="{icon_w}x{icon_h}" href="{icon_uri}">')
     stats["icon"] = icon_kind
+    # --- Thư viện unzipit cho file .zip/.cbz (chỉ nhúng khi archive thật sự có file nén) ---
+    zip_flags = None
+    unzipit_inline = ""
+    if stats["archives"]:
+        local = find_local_unzipit(opts, list(dict.fromkeys([icon_dir, script_dir])), lambda msg: print("Cảnh báo: " + msg, file=sys.stderr))
+        zip_flags = {"url": opts.unzipit_url or UNZIPIT_CDN_URL, "local": local is not None, "cacheMB": opts.zip_cache_mb}
+        stats["unzipit_local"] = local is not None
+        if local is not None:
+            unzipit_inline = "<script>" + local + "</script>"
     favicon_link = ""
     favicon = next((c for folder in [script_dir, *images_dirs]
                     for c in (folder / "fav.icon", folder / "favicon.ico", folder / "favicon.png", folder / "favicon.svg")
@@ -2182,7 +2709,7 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
         favicon_link = f'<link rel="icon" type="image/png" href="{icon_uri}">'
     theme_options = "".join(f'<option value="{key}">{html_escape(THEME_LABELS.get(key, key))}</option>' for key in THEMES)
     flags = {"filename": opts.show_filename, "created": opts.show_created_time, "size": opts.show_file_size,
-             "thumbs": opts.show_video_thumbnails, "dims": opts.show_dimensions}
+             "thumbs": opts.show_video_thumbnails, "dims": opts.show_dimensions, "zip": zip_flags}
     defaults = {"view": opts.default_view, "cols": opts.columns, "width": opts.feed_width, "autoplay": opts.video_autoplay}
 
     values = {
@@ -2192,7 +2719,7 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
         "AUTO_THEMES": js_json(auto_themes), "FLAGS": js_json(flags), "DEFAULTS": js_json(defaults),
         "COLOR_SCHEME": theme["scheme"], "THEME_COLOR": theme["mantle"], "FAVICON_LINK": favicon_link,
         "HEADER_STICKY_CLASS": "" if opts.sticky_header else "header-not-sticky", "TOTAL_POSTS": str(len(posts)),
-        "VERSION": VERSION, "APP_META": app_meta, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
+        "VERSION": VERSION, "APP_META": app_meta, "ARCHIVES": js_json(stats["archives"]), "UNZIPIT_INLINE": unzipit_inline, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
     }
     # Thay một lượt: dữ liệu người dùng (tên file, ghi chú) không bao giờ bị quét lại tìm placeholder.
     html = re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), m.group(0)), HTML_HEAD + CSS + BODY)
@@ -2206,6 +2733,12 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def zip_enabled(args, config: dict) -> bool:
+    value = config.get("zip_support", True)
+    enabled = value if isinstance(value, bool) else str(value).strip().casefold() in ("true", "yes", "1", "on", "enabled")
+    return enabled and not getattr(args, "no_zip", False)
+
+
 def ignore_patterns(args, config: dict) -> tuple:
     """Gộp ignored_folders trong config.toml với --ignore trên dòng lệnh."""
     configured = config.get("ignored_folders") or []
@@ -2235,7 +2768,7 @@ def resolve_folders(args, config: dict, config_path: Path | None, script_dir: Pa
                                  if item.is_dir() and not item.name.startswith(".") and item.name not in IGNORED_MEDIA_DIRS
                                  and not rules.matches(item.name, item.name, str(item))),
                                 key=lambda item: natural_key(item.name))
-            return [c for c in candidates if folder_has_media(c, IgnoreRules(ignore_patterns(args, config)))]
+            return [c for c in candidates if folder_has_media(c, IgnoreRules(ignore_patterns(args, config)), zip_enabled(args, config))]
         return [Path(str(v)) if Path(str(v)).is_absolute() else base_dir / str(v) for v in configured]
     candidates = [script_dir / "Images", script_dir / "images", Path.cwd() / "Images", Path.cwd() / "images"]
     return [next((c for c in candidates if c.is_dir()), candidates[0])]
@@ -2270,6 +2803,13 @@ def build_options(args, config: dict) -> Options:
     sort_by = {"date": "created", "created_at": "created", "newest": "created_desc", "latest": "created_desc"}.get(sort_by, sort_by)
     if sort_by not in ("name", "created", "created_desc"):
         raise ValueError("sort_by phải là name, created hoặc created_desc")
+    zip_mode = str(config.get("zip_post_mode") or "folder").strip().casefold()
+    zip_mode = {"file": "folder", "directory": "folder", "zip": "archive", "album": "archive"}.get(zip_mode, zip_mode)
+    if zip_mode not in ("folder", "archive"):
+        raise ValueError('zip_post_mode phải là "folder" (coi file nén như thư mục ảo) hoặc "archive" (mỗi file nén là một bài)')
+    unzipit_url = str(config.get("unzipit_url") or "").strip()
+    if unzipit_url and not re.match(r"^(https?://|/|\./)", unzipit_url):
+        raise ValueError("unzipit_url phải là địa chỉ http(s):// hoặc đường dẫn bắt đầu bằng / hay ./")
     status_bar = str(config.get("app_status_bar") or "black-translucent").strip().casefold()
     if status_bar not in STATUS_BAR_STYLES:
         raise ValueError(f"app_status_bar phải là một trong: {', '.join(STATUS_BAR_STYLES)}")
@@ -2288,14 +2828,18 @@ def build_options(args, config: dict) -> Options:
         ignored_folders=ignore_patterns(args, config),
         app_icon=str(args.icon.resolve()) if getattr(args, "icon", None) else str(config.get("app_icon") or ""),
         app_name=str(config.get("app_name") or ""), app_status_bar=status_bar,
+        zip_support=zip_enabled(args, config), zip_post_mode=zip_mode,
+        unzipit_path=str(args.unzipit) if getattr(args, "unzipit", None) else str(config.get("unzipit_path") or ""),
+        unzipit_url=unzipit_url, zip_cache_mb=integer("zip_cache_mb", 0, 4096),
     )
 
 
-def folder_signature(folders: list[Path], patterns: tuple = ()) -> tuple:
+def folder_signature(folders: list[Path], patterns: tuple = (), zip_support: bool = False) -> tuple:
     parts = []
     for folder in folders:
-        media, notes = scan_folder(folder, IgnoreRules(patterns))
-        parts.append((str(folder), tuple((m.rel, m.size, m.mtime_ns) for m in media), tuple(sorted((k, v.stat().st_mtime_ns) for k, v in notes.items() if v.exists()))))
+        media, notes, archives = scan_folder(folder, IgnoreRules(patterns), zip_support)
+        parts.append((str(folder), tuple((m.rel, m.size, m.mtime_ns) for m in media), tuple(sorted((k, v.stat().st_mtime_ns) for k, v in notes.items() if v.exists())),
+                      tuple((a.rel, a.size, a.mtime_ns) for a in archives)))
     return tuple(parts)
 
 
@@ -2312,6 +2856,9 @@ def run_build(args, script_dir: Path) -> tuple[int, Path, Options, list[Path]]:
     if not args.quiet:
         print(f"Đã tạo {output} · {count} bài · {stats['media']} media · {stats['bytes'] / 1024:.0f} KB · "
               f"theme {opts.theme} · sort {opts.sort_by} · {elapsed:.2f}s (quét {stats['scan']:.2f}s, đọc kích thước {stats['probe']:.2f}s)")
+        if stats["archives"]:
+            print(f"Đã lập chỉ mục {len(stats['archives'])} file nén (.zip/.cbz) với {stats['zip_entries']} media bên trong, "
+                  f"đọc bằng unzipit ({'nhúng local' if stats.get('unzipit_local') else 'tải từ CDN khi cần'}).")
         if stats["skipped_dirs"]:
             print(f"Đã bỏ qua {stats['skipped_dirs']} thư mục theo ignored_folders / --ignore.")
         if stats["unknown_dims"]:
@@ -2329,6 +2876,8 @@ def main() -> int:
     parser.add_argument("--sort-by", default=None, choices=("name", "created", "created_desc"), help="Sắp xếp theo tên, ngày tạo tăng dần hoặc mới nhất trước")
     parser.add_argument("--ignore", action="append", default=[], metavar="MẪU", help="Bỏ qua thư mục khớp mẫu (lặp lại được; gộp với ignored_folders). Ví dụ: --ignore Thumbs --ignore \"Anime/2023\"")
     parser.add_argument("--icon", type=Path, default=None, help="File PNG dùng làm icon Màn hình chính iOS (ghi đè app_icon)")
+    parser.add_argument("--no-zip", action="store_true", help="Không quét bên trong file .zip/.cbz (mặc định: coi chúng như thư mục ảo)")
+    parser.add_argument("--unzipit", type=Path, default=None, metavar="FILE", help="File unzipit cục bộ để nhúng inline (unzipit.module.js hoặc unzipit.min.js)")
     parser.add_argument("--no-probe", action="store_true", help="Bỏ qua bước đọc kích thước ảnh (build nhanh hơn, nhưng trang có thể nhảy layout khi ảnh tải)")
     parser.add_argument("--clear-cache", action="store_true", help="Xóa cache kích thước ảnh rồi build lại")
     parser.add_argument("--open", action="store_true", help="Mở archive trong trình duyệt sau khi build")
@@ -2351,11 +2900,11 @@ def main() -> int:
         webbrowser.open(output.resolve().as_uri())
     if args.watch:
         print("Đang theo dõi thay đổi… (Ctrl+C để dừng)")
-        signature = folder_signature(folders, _opts.ignored_folders)
+        signature = folder_signature(folders, _opts.ignored_folders, _opts.zip_support)
         try:
             while True:
                 time.sleep(2.0)
-                current = folder_signature(folders, _opts.ignored_folders)
+                current = folder_signature(folders, _opts.ignored_folders, _opts.zip_support)
                 if current != signature:
                     signature = current
                     try:
