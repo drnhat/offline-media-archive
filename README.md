@@ -1,6 +1,6 @@
-# Tumblr-style Media Archive (build_archive.py v3.4)
+# Tumblr-style Media Archive (build_archive.py v3.5)
 
-Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz, đăng bài lên Memos…
+Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz, đăng bài lên Memos, tự lọc media lỗi/chất lượng thấp…
 
 Không cần cài thêm gì: chỉ cần **Python 3.11 trở lên** (đọc cấu hình bằng `tomllib` có sẵn trong thư viện chuẩn, không phụ thuộc thư viện ngoài). Chạy bằng Python cũ hơn, script sẽ báo lỗi rõ ràng và dừng.
 
@@ -50,11 +50,15 @@ Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 | | `zip_post_mode` | `"folder"` (gom như thư mục) \| `"archive"` (mỗi file nén là một bài) | `"folder"` |
 | | `zip_cache_mb` | Ngưỡng RAM (MB) giữ lại ảnh đã giải nén nhưng không còn hiển thị | `48` |
 | | `unzipit_path` / `unzipit_url` | File unzipit local để nhúng / địa chỉ CDN | tự nhận / jsDelivr |
+| Chất lượng | `min_file_size_kb` | Loại file nhỏ hơn số KB này (0 = tắt; file 0 KB luôn bị loại) | `10` |
+| | `min_width` / `min_height` | Loại ảnh có chiều rộng/cao nhỏ hơn mức này (0 = tắt) | `300` / `300` |
+| | `corrupt_check` | `"fast"` \| `"full"` \| `"off"` — phát hiện file ảnh hỏng | `"fast"` |
 | Memos | `memos_enabled` | `true` \| `false` — bật nút "Post to Memos" | `false` |
 | | `memos_url` | Địa chỉ instance, ví dụ `"https://memos.example.com"` | — |
 | | `memos_token` | Personal Access Token (hoặc biến môi trường `MEMOS_TOKEN`) | — |
 | | `memos_visibility` | `"PRIVATE"` \| `"PROTECTED"` \| `"PUBLIC"` | `"PRIVATE"` |
 | | `memos_max_upload_mb` | Tệp lớn hơn bị chặn ở trình duyệt | `30` |
+| | `memos_tags` | Danh sách tag gắn vào mọi memo, ví dụ `["archive", "tumblr/2026"]` | `[]` |
 | Loại trừ | `ignored_folders` | Danh sách tên/mẫu thư mục bỏ qua khi quét | `[]` |
 | Icon iOS | `app_icon` | Đường dẫn file PNG làm icon Màn hình chính | tự tìm / tự vẽ |
 | | `app_name` | Tên ngắn dưới icon | `title` |
@@ -100,6 +104,8 @@ python build_archive.py [tùy chọn]
   --title TÊN          Ghi đè tên archive
   --theme TÊN          Ghi đè theme
   --sort-by KIỂU       name | created | created_desc
+  --no-quality-filter  Không lọc media lỗi/chất lượng thấp (file 0 KB vẫn bị loại)
+  --list-skipped       In danh sách media bị loại và lý do
   --no-zip             Không quét bên trong file .zip/.cbz
   --unzipit FILE       File unzipit cục bộ để nhúng vào HTML (ghi đè unzipit_path)
   --ignore MẪU         Bỏ qua thư mục khớp mẫu (lặp lại được, gộp với ignored_folders)
@@ -132,6 +138,7 @@ Các file cùng bài sẽ nằm chung một bài (nhiều ảnh cuộn liền nh
 | Tumblr | `tumblr_abc123o1_1280.jpg`, `tumblr_abc123o2_1280.jpg` | `tumblr_abc123` |
 | Số + chỉ mục | `128635952498_0.jpg`, `128635952498_1.jpg` | `128635952498` |
 | Mã + số thứ tự + tiêu đề | `1h5bjv8 01 Cute Asian.jpg`, `1h5bjv8 02 Cute Asian.jpg` | mã + tiêu đề |
+| Imgur album | `imgur_kHiDmxQ_001_yWOKsaI.jpg`, `imgur_kHiDmxQ_002_OwpLxmg.jpg`, … | `imgur_kHiDmxQ` (xếp theo số thứ tự 001, 002, …) |
 | Khác | `holiday.jpg` | tên file (mỗi file một bài) |
 
 Các file cùng nhóm nhưng nằm ở thư mục con khác nhau vẫn là các bài riêng.
@@ -369,7 +376,9 @@ memos_visibility = "PRIVATE"            # hoặc "PROTECTED" / "PUBLIC"
 2. `POST {memos_url}/api/v1/memos` với `{content, visibility, attachments:[{name}]}`.
 3. Dự phòng: nếu máy chủ trả memo chưa kèm đủ tệp, gọi `PATCH /api/v1/memos/{id}/attachments` để gắn.
 
-**Nội dung memo:** nếu bài có ghi chú `.md` thì dùng **Markdown gốc** của ghi chú; không có thì dùng dòng mặc định `<tên archive> · #<số bài>` (Memos không nhận memo rỗng). Đăng toàn bộ media của bài (kể cả khi đang lọc loại media).
+**Nội dung memo:** nếu bài có ghi chú `.md` thì dùng **Markdown gốc** của ghi chú; không có thì dùng dòng mặc định `<tên archive> · <số bài>` (ví dụ `VTPH Archive · 786`; Memos không nhận memo rỗng). Số bài **cố ý không có dấu `#`** vì Memos hiểu `#786` là một tag. Đăng toàn bộ media của bài (kể cả khi đang lọc loại media).
+
+**Gắn tag:** khai báo `memos_tags = ["archive", "tumblr/2026"]` để mọi memo được thêm một dòng tag ở cuối (`#archive #tumblr/2026`). Script tự làm sạch: bỏ dấu `#` đầu, đổi khoảng trắng thành `-` (`"my tag"` → `#my-tag`), bỏ ký tự đặc biệt, bỏ mục rỗng/trùng; tag có dấu `/` tạo tag lồng nhau của Memos. Không khai báo thì không thêm tag nào.
 
 **Trạng thái nút:** `Post to Memos` → `⏳ Posting...` (kèm tiến độ `2/5` khi nhiều tệp; nút bị khóa để không bấm đúp) → `✅ Posted!`. Lỗi hiện `❌ <lý do>` (chi tiết trong tooltip và thông báo), nút mở khóa để thử lại và tự trở về trạng thái ban đầu sau ~7 giây. Các lỗi được phân loại: 401 token sai/hết hạn, 403 thiếu quyền, 404 sai URL/phiên bản, 413 tệp quá lớn, không kết nối/CORS, tệp vượt `memos_max_upload_mb`, memo đã tạo nhưng chưa gắn được tệp. Bài đã đăng được ghi nhớ trong trình duyệt (hiện `✅ Posted!` sau khi tải lại, tooltip có liên kết memo); bấm lần nữa sẽ hỏi xác nhận trước khi đăng thêm bản mới.
 
@@ -385,7 +394,34 @@ memos_visibility = "PRIVATE"            # hoặc "PROTECTED" / "PUBLIC"
 
 ---
 
-## 11. Hiệu năng và mẹo cho bộ sưu tập lớn
+## 11. Lọc media lỗi & chất lượng thấp (mới ở 3.5)
+
+Khi quét, script **bỏ qua** (không đưa vào archive) các media sau, áp dụng cho cả file thường lẫn ảnh/video trong `.zip`/`.cbz`:
+
+| Điều kiện | Cấu hình | Mặc định |
+|---|---|---|
+| File **0 KB** (rỗng) | luôn áp dụng | — |
+| Dung lượng **nhỏ hơn** `min_file_size_kb` (ảnh và video) | `min_file_size_kb` | `10` |
+| Ảnh có **chiều rộng nhỏ hơn** `min_width` **hoặc chiều cao nhỏ hơn** `min_height` | `min_width`, `min_height` | `300`, `300` |
+| File ảnh **hỏng / lỗi metadata / không mở được** | `corrupt_check` | `"fast"` |
+
+- So sánh là "nhỏ hơn": đúng 10 KB (10240 byte) hoặc đúng 300 px thì **được giữ**. Đặt `0` để tắt từng điều kiện.
+- Kích thước tính theo **hướng hiển thị** (ảnh có EXIF xoay 90° được hoán đổi rộng/cao). **Video** chỉ xét dung lượng. **SVG** (ảnh vector) không xét kích thước điểm ảnh nhưng vẫn xét dung lượng; nếu bạn lưu SVG/logo nhỏ, hãy đặt `min_file_size_kb = 0`.
+- Kiểm tra file hỏng mở ảnh bằng **Pillow** trong `try/except`: lỗi thì bỏ qua file đó, không làm hỏng build.
+  - `"fast"` (mặc định): `Image.open` + `verify()`. Bắt file rác/đuôi giả, header và metadata hỏng, PNG sai CRC. Không bắt ảnh JPEG bị cắt cụt.
+  - `"full"`: giải mã toàn bộ điểm ảnh, bắt thêm ảnh bị cắt cụt/hỏng dữ liệu, nhưng chậm hơn nhiều (đo trên 700 ảnh ≈480 MB: tắt ≈0,25s, `fast` ≈1,7s, `full` ≈7s ở lần build đầu).
+  - `"off"` hoặc `false`: không kiểm tra.
+  - **Chưa cài Pillow** (`pip install pillow`): chỉ kiểm tra mức header (file rác bị bắt, PNG sai CRC thì không). Pillow là tùy chọn; các tính năng khác không cần.
+  - Định dạng Pillow không đọc sẵn được (AVIF/HEIC/JXL/SVG) không bị coi là hỏng.
+- Kết quả kiểm tra được **cache** theo dung lượng + ngày sửa của file (và theo chế độ `corrupt_check`/có-không Pillow), nên các lần build sau gần như tức thì.
+- Cuối build có dòng tóm tắt số lượng theo từng lý do. Dùng `--list-skipped` để in từng file bị loại; dùng `--no-quality-filter` (hoặc đặt các giá trị về 0 và `corrupt_check = "off"`) để tắt lọc.
+- Khi các bộ lọc đang bật, script vẫn đọc kích thước ảnh dù `probe_dimensions = false`.
+
+> **Quan trọng khi nâng cấp từ bản cũ:** các bộ lọc mặc định (10 KB, 300×300, kiểm tra file hỏng) sẽ **loại bớt ảnh nhỏ** khỏi archive, làm **tập bài thay đổi** nên mã nhận diện archive đổi, và bài đã thích/vị trí đọc cũ có thể không còn khớp. Hãy **sao lưu (`E`) trước** khi build lần đầu với bản này, rồi khôi phục (`I`): bài nào còn tồn tại sẽ được giữ. Muốn giữ nguyên như trước, dùng `--no-quality-filter` hoặc đặt `min_file_size_kb = 0`, `min_width = 0`, `min_height = 0`, `corrupt_check = "off"`.
+
+---
+
+## 12. Hiệu năng và mẹo cho bộ sưu tập lớn
 
 - Trang chỉ dựng vài bài đầu và tải thêm khi cuộn; ảnh dùng lazy-load. Ảnh đã có kích thước từ lúc build nên không bị nhảy layout.
 - Kiểm thử với 20.000 bài (32.000 media): build khoảng 1,4 giây (bản cũ ~8,6 giây); `index.html` ~3,6 MB (bản cũ ~6,5 MB); trang mở nhanh hơn ~40%.
@@ -396,7 +432,7 @@ memos_visibility = "PRIVATE"            # hoặc "PROTECTED" / "PUBLIC"
 
 ---
 
-## 12. Xử lý sự cố
+## 13. Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -417,11 +453,20 @@ memos_visibility = "PRIVATE"            # hoặc "PROTECTED" / "PUBLIC"
 | Không thấy nút "Post to Memos" | Kiểm tra đủ `memos_enabled = true`, `memos_url`, `memos_token`, build lại, và mở trang qua http/https (không phải `file://`); không hiện ở chế độ lưới. |
 | Nút báo "Không kết nối được Memos" | Sai `memos_url`, Memos chưa cho phép CORS từ địa chỉ này, hoặc trang https gọi Memos http. Xem mục 10. |
 | Nút báo 401 / 403 | Token sai, hết hạn hoặc thiếu quyền: tạo lại Personal Access Token rồi build lại. |
+| Ảnh biến mất sau khi nâng cấp | Bộ lọc chất lượng mặc định (10 KB, 300×300) đã loại ảnh nhỏ. Xem danh sách bằng `--list-skipped`, hạ ngưỡng trong `config.toml` hoặc dùng `--no-quality-filter`. |
+| Ảnh hợp lệ bị báo "hỏng" | Thử `corrupt_check = "off"` để xác nhận, và gửi file mẫu nếu có; định dạng lạ (AVIF/HEIC/JXL) không bị coi là hỏng. |
+| Bài đã thích mất sau khi bật bộ lọc | Tập bài đổi nên mã nhận diện đổi: khôi phục từ file sao lưu (`I`) hoặc tắt bộ lọc. |
+| Memo bị gắn tag số (vd. #786) | Dùng bản 3.5 trở lên: nội dung mặc định không còn dấu `#` trước số. |
 | Muốn build lại từ đầu | `python build_archive.py --clear-cache`. |
 
 ---
 
-## 13. Có gì mới
+## 14. Có gì mới
+
+### 3.5
+- **Lọc media lỗi & chất lượng thấp:** `min_file_size_kb` (10), `min_width` (300), `min_height` (300), `corrupt_check` ("fast"); loại file 0 KB, ảnh/video quá nhỏ, ảnh nhỏ hơn mức cấu hình và file hỏng (Pillow bọc `try/except`); `--list-skipped`, `--no-quality-filter`; kết quả có cache.
+- **Gom bài Imgur:** `imgur_<album>_<số thứ tự>_<mã ảnh>.jpg` (ví dụ `imgur_kHiDmxQ_001_yWOKsaI.jpg` … `_004_…`) được gom thành một bài theo mã album, xếp theo số thứ tự.
+- **Memos:** nội dung mặc định đổi từ `<tên archive> · #<số>` thành `<tên archive> · <số>` (không còn bị Memos hiểu là tag); thêm `memos_tags` để gắn tag cho mọi memo.
 
 ### 3.4
 - **Đăng bài lên Memos:** nút "Post to Memos" trên từng bài (chỉ khi cấu hình đủ và mở qua http/https), upload tệp qua `/api/v1/attachments` rồi tạo memo qua `/api/v1/memos`, có trạng thái ⏳/✅/❌, chống bấm đúp, ghi nhớ bài đã đăng. Cấu hình: `memos_enabled`, `memos_url`, `memos_token` (hoặc `MEMOS_TOKEN`), `memos_visibility`, `memos_max_upload_mb`.

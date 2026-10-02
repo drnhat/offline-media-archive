@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.4).
+"""Tumblr-style offline media archive builder (v3.5).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
 MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
@@ -26,6 +26,7 @@ import re
 import struct
 import time
 import tomllib
+import warnings
 import webbrowser
 import zipfile
 import zlib
@@ -36,7 +37,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.4"
+VERSION = "3.5"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -118,6 +119,7 @@ IGNORED_MEDIA_DIRS = {"@eaDir", "__MACOSX"}
 KIND_IMAGE, KIND_GIF, KIND_VIDEO = 0, 1, 2
 TUMBLR_MEDIA_SEQUENCE = re.compile(r"^(tumblr_.+?)o(\d+)(?:_r\d+)?_\d+$", re.IGNORECASE)
 TUMBLR_ID = re.compile(r"^(tumblr_[A-Za-z0-9]+)(?:_|$)", re.IGNORECASE)
+IMGUR_SEQUENCE = re.compile(r"^(imgur_[A-Za-z0-9]+)_(\d{1,4})_[A-Za-z0-9]+$", re.IGNORECASE)   # imgur_kHiDmxQ_001_yWOKsaI
 NUMERIC_MEDIA_SEQUENCE = re.compile(r"^(\d+)_\d+$")
 NAMED_MEDIA_SEQUENCE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_-]*)\s+(\d+)\s+(.+)$")
 CACHE_FILENAME = ".build_archive_cache.json"
@@ -158,6 +160,8 @@ def image_group_id(filename: str) -> str:
     ``_rN`` and size suffixes identify variants. Numeric archive names such
     as ``128635952498_0.jpg`` use ``_<index>`` for media in one post. Names
     such as ``1h5bjv8 01 Cute Asian.jpg`` share a group by id and title.
+    Imgur album files such as ``imgur_kHiDmxQ_001_yWOKsaI.jpg`` share a group by
+    album id (``imgur_kHiDmxQ``), ordered by their sequence number.
     Other filenames are grouped only by their complete stem.
     """
     name = posixpath.basename(filename)
@@ -167,6 +171,9 @@ def image_group_id(filename: str) -> str:
         return match.group(1).casefold()
     match = TUMBLR_ID.match(name)
     if match:
+        return match.group(1).casefold()
+    match = IMGUR_SEQUENCE.match(stem)
+    if match:   # imgur_<mã album>_<số thứ tự>_<mã ảnh>: cùng mã album → cùng một bài, xếp theo số thứ tự
         return match.group(1).casefold()
     match = NAMED_MEDIA_SEQUENCE.match(stem)
     if match:
@@ -557,6 +564,79 @@ def _svg_size(handle) -> tuple[int, int] | None:
     return max(1, round(width / height * 1000)), 1000  # chỉ cần tỉ lệ
 
 
+# --- Kiểm tra file hỏng (Pillow là tùy chọn; không có thì kiểm tra mức header) ---
+PIL_CORE_SUFFIXES = {".jpg", ".jpeg", ".png", ".apng", ".gif", ".webp", ".bmp"}   # định dạng Pillow luôn đọc được → có thể kết luận "hỏng"
+CORRUPT_MODES = ("off", "fast", "full")
+CORRUPT_DIMS = (-1, -1)   # giá trị đánh dấu "file hỏng" trong kết quả/cache
+_PIL: dict = {}
+
+
+def get_pil():
+    """Nạp Pillow một lần; trả về module Image hoặc None nếu chưa cài."""
+    if "image" not in _PIL:
+        try:
+            from PIL import Image
+            _PIL["image"] = Image
+        except ImportError:
+            _PIL["image"] = None
+    return _PIL["image"]
+
+
+def _pil_inspect(handle, suffix: str, mode: str) -> tuple[tuple[int, int] | None, bool]:
+    """Mở bằng Pillow trong try/except. Trả về (kích thước hiển thị hoặc None, file có hỏng không).
+    fast: Image.open + verify() (bắt header/metadata/chunk hỏng). full: giải mã toàn bộ điểm ảnh (bắt cả ảnh bị cắt cụt, chậm hơn)."""
+    Image = get_pil()
+    if Image is None:
+        return None, False
+    core = suffix in PIL_CORE_SUFFIXES
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if core and mode != "off":
+                handle.seek(0)
+                with Image.open(handle) as image:
+                    image.verify()      # phải gọi NGAY sau open (PNG yêu cầu); verify() làm ảnh không dùng được nữa nên mở lại bên dưới
+            handle.seek(0)
+            with Image.open(handle) as image:
+                size = image.size
+                try:
+                    orientation = image.getexif().get(0x0112, 1)
+                except Exception:
+                    orientation = 1
+                if orientation in (5, 6, 7, 8):
+                    size = (size[1], size[0])
+                if core and mode == "full":
+                    image.load()        # giải mã toàn bộ điểm ảnh: bắt cả ảnh bị cắt cụt/hỏng dữ liệu
+        return size, False
+    except Image.DecompressionBombError:
+        return None, False      # ảnh khổng lồ hợp lệ: không coi là hỏng
+    except Exception:           # Pillow có thể ném OSError/ValueError/SyntaxError/struct.error/... tùy định dạng
+        return None, core and mode != "off"
+
+
+def inspect_media(handle, suffix: str, mode: str) -> tuple[int, int] | None:
+    """Kích thước hiển thị; CORRUPT_DIMS nếu file hỏng (khi mode != "off"); None nếu không xác định được."""
+    dims = _probe_handle(handle, suffix)
+    if mode == "off":
+        return dims
+    if get_pil() is not None:
+        pil_dims, corrupt = _pil_inspect(handle, suffix, mode)
+        if corrupt:
+            return CORRUPT_DIMS
+        return dims or pil_dims
+    if dims is None and suffix in PIL_CORE_SUFFIXES:
+        return CORRUPT_DIMS     # không có Pillow: header JPG/PNG/GIF/WEBP/BMP không đọc được → coi là hỏng
+    return dims
+
+
+def inspect_path(path: Path, mode: str) -> tuple[int, int] | None:
+    try:
+        with open(path, "rb") as handle:
+            return inspect_media(handle, path.suffix.casefold(), mode)
+    except OSError:
+        return CORRUPT_DIMS if mode != "off" else None   # không mở được file
+
+
 def _probe_handle(handle, suffix: str) -> tuple[int, int] | None:
     """Đọc kích thước từ một file-like (file thường hoặc entry trong zip)."""
     try:
@@ -595,30 +675,31 @@ def media_key(media: MediaFile) -> str:
     return str(media.path) if media.zip is None else f"{media.path}!/{media.zip[2]}:{media.zip[1]}"
 
 
-def _probe_zip_group(path: Path, items: list[MediaFile]) -> list[tuple[MediaFile, tuple[int, int] | None]]:
+def _probe_zip_group(path: Path, items: list[MediaFile], mode: str) -> list[tuple[MediaFile, tuple[int, int] | None]]:
     results: list[tuple[MediaFile, tuple[int, int] | None]] = []
+    failed = CORRUPT_DIMS if mode != "off" else None
     try:
         with zipfile.ZipFile(path) as handle:
             infos = handle.infolist()
             for media in items:
-                dims = None
                 try:
                     with handle.open(infos[media.zip[2]]) as member:
-                        dims = _probe_handle(member, os.path.splitext(media.rel)[1].casefold())
+                        dims = inspect_media(member, os.path.splitext(media.rel)[1].casefold(), mode)
                 except (OSError, IndexError, RuntimeError, NotImplementedError, zipfile.BadZipFile, zlib.error, EOFError):
-                    dims = None
+                    dims = failed
                 results.append((media, dims))
     except (zipfile.BadZipFile, OSError, NotImplementedError, ValueError, RuntimeError, EOFError):
-        return [(media, None) for media in items]
+        return [(media, None) for media in items]   # không mở được cả file nén: để bước liệt kê/cảnh báo xử lý, không quy là ảnh hỏng
     return results
 
 
 class SizeCache:
     """Cache kích thước ảnh theo (đường dẫn, dung lượng, mtime) → lần build sau gần như tức thì."""
-    VERSION = 2
+    VERSION = 3
 
-    def __init__(self, path: Path | None) -> None:
+    def __init__(self, path: Path | None, tag: str = "") -> None:
         self.path = path
+        self.tag = tag
         self.entries: dict[str, list[int]] = {}
         self.used: dict[str, list[int]] = {}
         self.extra: dict[str, str] = {}
@@ -627,7 +708,8 @@ class SizeCache:
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict) and raw.get("v") == self.VERSION and isinstance(raw.get("f"), dict):
-                    self.entries = raw["f"]
+                    if raw.get("m") == tag:   # đổi chế độ kiểm tra file hỏng / có-không Pillow → kết quả cũ không còn đáng tin
+                        self.entries = raw["f"]
                     if isinstance(raw.get("x"), dict):
                         self.extra = {k: v for k, v in raw["x"].items() if isinstance(v, str)}
             except (OSError, ValueError):
@@ -653,14 +735,14 @@ class SizeCache:
         if merged == self.entries and not self.extra_dirty:
             return
         try:
-            self.path.write_text(json.dumps({"v": self.VERSION, "f": merged, "x": self.extra}, separators=(",", ":")), encoding="utf-8")
+            self.path.write_text(json.dumps({"v": self.VERSION, "m": self.tag, "f": merged, "x": self.extra}, separators=(",", ":")), encoding="utf-8")
             self.entries = merged
             self.extra_dirty = False
         except OSError:
             pass
 
 
-def probe_media_sizes(files: list[MediaFile], cache: SizeCache, workers: int) -> dict[str, tuple[int, int]]:
+def probe_media_sizes(files: list[MediaFile], cache: SizeCache, workers: int, mode: str = "off") -> dict[str, tuple[int, int]]:
     result: dict[str, tuple[int, int]] = {}
     todo: list[MediaFile] = []
     todo_zip: dict[str, list[MediaFile]] = {}
@@ -677,11 +759,11 @@ def probe_media_sizes(files: list[MediaFile], cache: SizeCache, workers: int) ->
             todo_zip.setdefault(str(media.path), []).append(media)
     if todo or todo_zip:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for media, dims in zip(todo, pool.map(lambda m: probe_size(m.path), todo)):
+            for media, dims in zip(todo, pool.map(lambda m: inspect_path(m.path, mode), todo)):
                 width, height = dims or (0, 0)
                 cache.store(media_key(media), media.size, media.mtime_ns, width, height)
                 result[media_key(media)] = (width, height)
-            for group in pool.map(lambda item: _probe_zip_group(Path(item[0]), item[1]), todo_zip.items()):
+            for group in pool.map(lambda item: _probe_zip_group(Path(item[0]), item[1], mode), todo_zip.items()):
                 for media, dims in group:
                     width, height = dims or (0, 0)
                     cache.store(media_key(media), media.size, media.mtime_ns, width, height)
@@ -930,7 +1012,8 @@ DEFAULT_CONFIG: dict[str, object] = {
     "feed_width": 720, "probe_dimensions": True, "video_autoplay": False,
     "ignored_folders": [], "app_icon": "", "app_name": "", "app_status_bar": "black-translucent",
     "zip_support": True, "zip_post_mode": "folder", "unzipit_path": "", "unzipit_url": "", "zip_cache_mb": 48,
-    "memos_enabled": False, "memos_url": "", "memos_token": "", "memos_visibility": "PRIVATE", "memos_max_upload_mb": 30,
+    "memos_enabled": False, "memos_url": "", "memos_token": "", "memos_visibility": "PRIVATE", "memos_max_upload_mb": 30, "memos_tags": [],
+    "min_file_size_kb": 10, "min_width": 300, "min_height": 300, "corrupt_check": "fast",
 }
 CONFIG_ALIASES = {
     "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
@@ -939,7 +1022,8 @@ CONFIG_ALIASES = {
     "autoplay": "video_autoplay", "ignore_folders": "ignored_folders", "exclude_folders": "ignored_folders",
     "ignore": "ignored_folders", "exclude": "ignored_folders", "zip": "zip_support", "archives": "zip_support",
     "zip_mode": "zip_post_mode", "unzipit": "unzipit_path", "memos": "memos_enabled", "memo_url": "memos_url",
-    "memo_token": "memos_token", "memo_visibility": "memos_visibility", "icon": "app_icon", "apple_touch_icon": "app_icon",
+    "memo_token": "memos_token", "memo_visibility": "memos_visibility", "memo_tags": "memos_tags",
+    "min_size_kb": "min_file_size_kb", "min_w": "min_width", "min_h": "min_height", "check_corrupt": "corrupt_check", "icon": "app_icon", "apple_touch_icon": "app_icon",
 }
 
 
@@ -2153,7 +2237,11 @@ async function memosMediaBlob(m){
 }
 function memosContent(idx){
   const p=POSTS[idx],notes=p.nm?Object.keys(p.nm).sort((a,b)=>a-b).map(k=>p.nm[k]).filter(Boolean):[];
-  return notes.join('\n\n')||`${ARCHIVE_TITLE} · #${idx+1}`;   // Memos không nhận memo rỗng
+  // Nội dung mặc định KHÔNG dùng "#số" vì Memos sẽ hiểu "#786" là một tag. Memos cũng không nhận memo rỗng.
+  let text=notes.join('\n\n')||`${ARCHIVE_TITLE} · ${idx+1}`;
+  const tags=(MEMOS.tags||[]).filter(Boolean);
+  if(tags.length)text+='\n\n'+tags.map(t=>'#'+t).join(' ');   // tag cấu hình ở memos_tags, đặt cuối memo
+  return text;
 }
 async function postToMemos(idx,btn){
   if(!MEMOS_ON||!btn||btn.disabled)return;
@@ -2595,6 +2683,11 @@ class Options(NamedTuple):
     memos_token: str
     memos_visibility: str
     memos_max_upload_mb: int
+    memos_tags: tuple
+    min_file_size_kb: int
+    min_width: int
+    min_height: int
+    corrupt_check: str
 
 
 def render_sprite() -> str:
@@ -2604,6 +2697,38 @@ def render_sprite() -> str:
 
 def relative_media_root(folder: Path, output_dir: Path) -> str:
     return Path(os.path.relpath(folder.resolve(), output_dir)).as_posix()
+
+
+def reject_reason(media: MediaFile, dims, opts: Options) -> str | None:
+    """Lý do loại một media (None = giữ). File 0 byte luôn bị loại; video chỉ xét dung lượng; SVG không xét kích thước điểm ảnh."""
+    if media.size <= 0:
+        return "empty"
+    if opts.min_file_size_kb and media.size < opts.min_file_size_kb * 1024:
+        return "small_file"
+    if media_kind(media.rel) == KIND_VIDEO:
+        return None
+    if dims == CORRUPT_DIMS:
+        return "corrupt"
+    if dims and dims[0] > 0 and dims[1] > 0 and not media.rel.casefold().endswith(".svg"):
+        if dims[0] < opts.min_width or dims[1] < opts.min_height:
+            return "small_dims"
+    return None
+
+
+def parse_memos_tags(value) -> tuple[str, ...]:
+    """memos_tags: danh sách hoặc chuỗi (cách nhau bởi dấu cách/phẩy). Bỏ '#', đổi khoảng trắng thành '-', loại ký tự không hợp lệ."""
+    if value in (None, ""):
+        return ()
+    if isinstance(value, str):
+        value = re.split(r"[,\s]+", value) if ("," in value or " " in value.strip()) else [value]
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError('memos_tags phải là danh sách chuỗi, ví dụ ["archive", "ảnh/2026"]')
+    tags: list[str] = []
+    for raw in value:
+        tag = re.sub(r"[^\w\-/]", "", re.sub(r"\s+", "-", raw.strip().lstrip("#").strip()))
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tuple(tags[:30])
 
 
 def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache: SizeCache, log) -> tuple[list[dict], dict]:
@@ -2633,12 +2758,27 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
 
     sizes: dict[str, tuple[int, int]] = {}
     t0 = time.perf_counter()
-    if opts.probe_dimensions:
+    need_probe = opts.probe_dimensions or opts.min_width > 0 or opts.min_height > 0 or opts.corrupt_check != "off"
+    if need_probe:   # các bộ lọc kích thước/file hỏng cần đọc kích thước, kể cả khi probe_dimensions = false
         all_media = [m for _folder, media, _notes in scans for m in media]
         workers = min(16, (os.cpu_count() or 4) * 2)
-        sizes = probe_media_sizes(all_media, cache, workers)
+        sizes = probe_media_sizes(all_media, cache, workers, opts.corrupt_check)
         cache.save([str(folder) for folder in images_dirs])
     t_probe = time.perf_counter() - t0
+
+    # --- Loại media lỗi / chất lượng thấp trước khi gom bài ---
+    rejected: list[tuple[str, str]] = []
+    filtered_scans = []
+    for folder, media, notes_by_stem in scans:
+        kept: list[MediaFile] = []
+        for media_file in media:
+            reason = reject_reason(media_file, sizes.get(media_key(media_file)), opts)
+            if reason:
+                rejected.append((posixpath.join(folder.name, media_file.rel), reason))
+            else:
+                kept.append(media_file)
+        filtered_scans.append((folder, kept, notes_by_stem))
+    scans = filtered_scans
 
     name_counts: dict[str, int] = {}
     for folder in images_dirs:
@@ -2707,7 +2847,17 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
         entries.sort(key=lambda e: (e["created"], e["nk_name"], e["nk_folder"]), reverse=True)
     stats = {"scan": t_scan, "probe": t_probe, "skipped_dirs": ignore.skipped, "media": sum(len(e["names"]) for e in entries),
              "unknown_dims": sum(1 for e in entries for m in e["post"]["m"] if not m[1] and media_kind(m[0]) != KIND_VIDEO),
-             "archives": archive_table, "zip_entries": sum(row[2] for row in archive_table), "zip_problems": zip_problems}
+             "archives": archive_table, "zip_entries": 0, "zip_problems": zip_problems,
+             "rejected": {reason: sum(1 for _p, r in rejected if r == reason) for reason in ("empty", "small_file", "small_dims", "corrupt")},
+             "rejected_list": rejected}
+    counts = [0] * len(archive_table)    # số media còn lại trong từng file nén sau khi lọc
+    for entry in entries:
+        for item in entry["post"]["m"]:
+            if len(item) > 5:
+                counts[item[5][0]] += 1
+    for row, count in zip(archive_table, counts):
+        row[2] = count
+    stats["zip_entries"] = sum(counts)
     return entries, stats
 
 
@@ -2760,7 +2910,8 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
         if not folder.is_dir():
             raise FileNotFoundError(f"Không tìm thấy thư mục media: {folder}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    cache = SizeCache(script_dir / CACHE_FILENAME if opts.probe_dimensions else None)
+    need_cache = opts.probe_dimensions or opts.min_width > 0 or opts.min_height > 0 or opts.corrupt_check != "off"
+    cache = SizeCache(script_dir / CACHE_FILENAME if need_cache else None, tag=f"{opts.corrupt_check}|{'pil' if get_pil() else 'nopil'}")
     entries, stats = collect_entries(images_dirs, output, opts, cache, log)
     posts = [entry["post"] for entry in entries]
 
@@ -2794,7 +2945,7 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
     memos_cfg = None
     if opts.memos_enabled:
         if memos_active(opts):
-            memos_cfg = {"url": opts.memos_url, "token": opts.memos_token, "visibility": opts.memos_visibility, "maxMB": opts.memos_max_upload_mb}
+            memos_cfg = {"url": opts.memos_url, "token": opts.memos_token, "visibility": opts.memos_visibility, "maxMB": opts.memos_max_upload_mb, "tags": list(opts.memos_tags)}
         else:
             print("Cảnh báo: memos_enabled = true nhưng thiếu memos_url hoặc memos_token (hoặc biến môi trường MEMOS_TOKEN) — đã tắt tích hợp Memos.", file=sys.stderr)
     stats["memos"] = memos_cfg["url"] if memos_cfg else None
@@ -2918,6 +3069,16 @@ def build_options(args, config: dict) -> Options:
     memos_visibility = str(config.get("memos_visibility") or "PRIVATE").strip().upper()
     if memos_visibility not in ("PRIVATE", "PROTECTED", "PUBLIC"):
         raise ValueError('memos_visibility phải là "PRIVATE", "PROTECTED" hoặc "PUBLIC"')
+    memos_tags = parse_memos_tags(config.get("memos_tags"))
+    if getattr(args, "no_quality_filter", False):
+        quality = {"kb": 0, "w": 0, "h": 0, "check": "off"}
+    else:
+        check = config.get("corrupt_check", "fast")
+        check = ("fast" if check else "off") if isinstance(check, bool) else str(check or "fast").strip().casefold()
+        if check not in CORRUPT_MODES:
+            raise ValueError('corrupt_check phải là "off", "fast" hoặc "full"')
+        quality = {"kb": integer("min_file_size_kb", 0, 10_000_000), "w": integer("min_width", 0, 100_000),
+                   "h": integer("min_height", 0, 100_000), "check": check}
     zip_mode = str(config.get("zip_post_mode") or "folder").strip().casefold()
     zip_mode = {"file": "folder", "directory": "folder", "zip": "archive", "album": "archive"}.get(zip_mode, zip_mode)
     if zip_mode not in ("folder", "archive"):
@@ -2948,6 +3109,7 @@ def build_options(args, config: dict) -> Options:
         unzipit_url=unzipit_url, zip_cache_mb=integer("zip_cache_mb", 0, 4096),
         memos_enabled=truthy("memos_enabled"), memos_url=memos_url, memos_token=memos_token,
         memos_visibility=memos_visibility, memos_max_upload_mb=integer("memos_max_upload_mb", 1, 2048),
+        memos_tags=memos_tags, min_file_size_kb=quality["kb"], min_width=quality["w"], min_height=quality["h"], corrupt_check=quality["check"],
     )
 
 
@@ -2976,6 +3138,24 @@ def run_build(args, script_dir: Path) -> tuple[int, Path, Options, list[Path]]:
         if stats["archives"]:
             print(f"Đã lập chỉ mục {len(stats['archives'])} file nén (.zip/.cbz) với {stats['zip_entries']} media bên trong, "
                   f"đọc bằng unzipit ({'nhúng local' if stats.get('unzipit_local') else 'tải từ CDN khi cần'}).")
+        rej = stats["rejected"]
+        if sum(rej.values()):
+            parts = []
+            if rej["empty"]:
+                parts.append(f"{rej['empty']} file rỗng (0 KB)")
+            if rej["small_file"]:
+                parts.append(f"{rej['small_file']} có dung lượng nhỏ hơn {opts.min_file_size_kb} KB")
+            if rej["small_dims"]:
+                parts.append(f"{rej['small_dims']} có kích thước nhỏ hơn {opts.min_width}×{opts.min_height}")
+            if rej["corrupt"]:
+                parts.append(f"{rej['corrupt']} bị hỏng/không mở được")
+            print(f"Đã loại {sum(rej.values())} media lỗi/chất lượng thấp: " + "; ".join(parts) + ". (--list-skipped để xem danh sách, --no-quality-filter để tắt lọc)")
+        if opts.corrupt_check != "off" and get_pil() is None:
+            print("Lưu ý: chưa cài Pillow nên chỉ kiểm tra file hỏng ở mức đọc header. Cài bằng `pip install pillow` để kiểm tra kỹ hơn.")
+        if getattr(args, "list_skipped", False):
+            labels_vi = {"empty": "file rỗng", "small_file": "dung lượng nhỏ", "small_dims": "kích thước nhỏ", "corrupt": "hỏng/không mở được"}
+            for path_text, reason in stats["rejected_list"]:
+                print(f"  - [{labels_vi[reason]}] {path_text}")
         if stats.get("memos"):
             print(f"Memos: đã bật nút \"Post to Memos\" → {stats['memos']} (chỉ hiện khi mở qua http/https). "
                   f"CẢNH BÁO: token được nhúng trong index.html, đừng chia sẻ/đăng công khai file này.")
@@ -2996,6 +3176,8 @@ def main() -> int:
     parser.add_argument("--sort-by", default=None, choices=("name", "created", "created_desc"), help="Sắp xếp theo tên, ngày tạo tăng dần hoặc mới nhất trước")
     parser.add_argument("--ignore", action="append", default=[], metavar="MẪU", help="Bỏ qua thư mục khớp mẫu (lặp lại được; gộp với ignored_folders). Ví dụ: --ignore Thumbs --ignore \"Anime/2023\"")
     parser.add_argument("--icon", type=Path, default=None, help="File PNG dùng làm icon Màn hình chính iOS (ghi đè app_icon)")
+    parser.add_argument("--no-quality-filter", action="store_true", help="Không lọc media lỗi/chất lượng thấp (bỏ qua min_file_size_kb, min_width, min_height và kiểm tra file hỏng; file 0 byte vẫn bị loại)")
+    parser.add_argument("--list-skipped", action="store_true", help="In danh sách media bị loại và lý do")
     parser.add_argument("--no-zip", action="store_true", help="Không quét bên trong file .zip/.cbz (mặc định: coi chúng như thư mục ảo)")
     parser.add_argument("--unzipit", type=Path, default=None, metavar="FILE", help="File unzipit cục bộ để nhúng inline (unzipit.module.js hoặc unzipit.min.js)")
     parser.add_argument("--no-probe", action="store_true", help="Bỏ qua bước đọc kích thước ảnh (build nhanh hơn, nhưng trang có thể nhảy layout khi ảnh tải)")

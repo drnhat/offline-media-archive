@@ -1,5 +1,5 @@
 # ============================================================================
-#  config.toml — cấu hình cho build_archive.py (v3.4, cần Python 3.11+)
+#  config.toml — cấu hình cho build_archive.py (v3.5, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
 #  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
 #
@@ -81,6 +81,11 @@ zip_cache_mb = 48
 # memos_token = "memos_pat_xxxxxxxx"           # Personal Access Token: Memos → Settings → My Account → Access Tokens
 # memos_visibility = "PRIVATE"                 # "PRIVATE" | "PROTECTED" | "PUBLIC" (mặc định PRIVATE)
 # memos_max_upload_mb = 30                     # tệp lớn hơn bị chặn ngay ở trình duyệt (khớp giới hạn upload của Memos)
+# memos_tags = ["archive", "tumblr/2026"]     # tag tự gắn vào MỌI memo, đặt ở cuối nội dung dưới dạng "#archive #tumblr/2026".
+#                                              # Có thể viết "my tag" hoặc "#my tag" (script tự bỏ "#", đổi khoảng trắng thành "-").
+#                                              # Để trống/không khai báo = không gắn tag. Nội dung mặc định của memo (khi bài không có
+#                                              # ghi chú .md) là "<tên archive> · <số bài>", cố ý KHÔNG có "#" trước số để Memos
+#                                              # không tự tạo tag số.
 #
 # CẢNH BÁO BẢO MẬT: token được NHÚNG NGUYÊN VĂN trong index.html (JavaScript chạy ở trình duyệt cần nó).
 # Ai có file/đường dẫn tới trang này đều dùng được token. Chỉ dùng cho archive riêng tư, tạo token riêng cho
@@ -90,6 +95,28 @@ zip_cache_mb = 48
 #
 # Yêu cầu: instance Memos phải cho phép CORS từ địa chỉ nơi bạn mở archive (hoặc đặt archive và Memos
 # sau cùng một reverse proxy), và không mở trang https rồi gọi Memos http (trình duyệt chặn mixed content).
+
+# --- Lọc media lỗi & chất lượng thấp ------------------------------------------------------
+# Các file dưới đây bị BỎ QUA khi quét (cả file thường lẫn ảnh trong .zip/.cbz). Dùng
+# `python build_archive.py --list-skipped` để xem danh sách file bị loại và lý do.
+#
+# File dung lượng NHỎ HƠN số KB này bị loại (áp dụng cả ảnh lẫn video). File 0 KB luôn bị loại.
+# Đặt 0 để tắt điều kiện này (vẫn loại file 0 KB).
+min_file_size_kb = 10
+# Ảnh có chiều rộng NHỎ HƠN min_width HOẶC chiều cao NHỎ HƠN min_height bị loại (tính theo hướng hiển thị,
+# đã xét EXIF xoay). Đúng bằng ngưỡng thì giữ. Video và SVG không xét điều kiện này. 0 = tắt.
+min_width = 300
+min_height = 300
+# Phát hiện file ảnh bị hỏng / không mở được (dùng Pillow; chưa cài thì chỉ kiểm tra header):
+#   "fast" : mở bằng Pillow + verify() — bắt file rác, header/metadata hỏng, PNG sai CRC (mặc định, nhanh)
+#   "full" : giải mã toàn bộ điểm ảnh — bắt thêm ảnh bị cắt cụt/hỏng dữ liệu (chậm hơn nhiều lần)
+#   "off"  : không kiểm tra
+# Cài Pillow: pip install pillow. Kết quả được cache theo file nên lần build sau gần như tức thì.
+corrupt_check = "fast"
+# LƯU Ý: bật các bộ lọc này làm THAY ĐỔI tập bài của archive (nên mã nhận diện archive đổi), do đó bài đã
+# thích/vị trí đọc cũ có thể không còn khớp. Hãy sao lưu (phím E) trước khi build lần đầu với bản này,
+# hoặc đặt min_file_size_kb = 0, min_width = 0, min_height = 0, corrupt_check = "off" để giữ nguyên như trước.
+# Tắt nhanh toàn bộ bằng dòng lệnh: python build_archive.py --no-quality-filter
 
 # --- Giao diện ----------------------------------------------------------------
 
