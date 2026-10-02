@@ -1,5 +1,5 @@
 # ============================================================================
-#  config.toml — cấu hình cho build_archive.py (v3.3, cần Python 3.11+)
+#  config.toml — cấu hình cho build_archive.py (v3.4, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
 #  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
 #
@@ -70,6 +70,26 @@ zip_cache_mb = 48
 
 # Lưu ý: mẫu trong ignored_folders cũng áp dụng cho thư mục BÊN TRONG file nén
 # và cho chính tên file nén (vd. "old_*.zip" hoặc "Thumbs").
+
+# --- Đăng bài lên Memos (https://usememos.com, API v1, phiên bản v0.31) ----------------
+
+# Thêm nút "Post to Memos" vào từng bài: đăng nội dung + ảnh/video của bài lên instance Memos của bạn.
+# Nút CHỈ hiện khi memos_enabled = true, có đủ memos_url + memos_token, VÀ trang được mở qua
+# http/https (mở bằng file:// thì không hiện, để tránh lỗi CORS/origin).
+# memos_enabled = true
+# memos_url = "https://memos.example.com"      # địa chỉ instance (không cần dấu / ở cuối)
+# memos_token = "memos_pat_xxxxxxxx"           # Personal Access Token: Memos → Settings → My Account → Access Tokens
+# memos_visibility = "PRIVATE"                 # "PRIVATE" | "PROTECTED" | "PUBLIC" (mặc định PRIVATE)
+# memos_max_upload_mb = 30                     # tệp lớn hơn bị chặn ngay ở trình duyệt (khớp giới hạn upload của Memos)
+#
+# CẢNH BÁO BẢO MẬT: token được NHÚNG NGUYÊN VĂN trong index.html (JavaScript chạy ở trình duyệt cần nó).
+# Ai có file/đường dẫn tới trang này đều dùng được token. Chỉ dùng cho archive riêng tư, tạo token riêng cho
+# mục đích này (thu hồi được), và đừng đăng index.html lên nơi công khai.
+# Để khỏi ghi token vào config.toml, có thể để trống memos_token và đặt biến môi trường MEMOS_TOKEN lúc build
+# (token vẫn nằm trong index.html được tạo ra).
+#
+# Yêu cầu: instance Memos phải cho phép CORS từ địa chỉ nơi bạn mở archive (hoặc đặt archive và Memos
+# sau cùng một reverse proxy), và không mở trang https rồi gọi Memos http (trình duyệt chặn mixed content).
 
 # --- Giao diện ----------------------------------------------------------------
 

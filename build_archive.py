@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.3).
+"""Tumblr-style offline media archive builder (v3.4).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
 MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.3"
+VERSION = "3.4"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -930,6 +930,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "feed_width": 720, "probe_dimensions": True, "video_autoplay": False,
     "ignored_folders": [], "app_icon": "", "app_name": "", "app_status_bar": "black-translucent",
     "zip_support": True, "zip_post_mode": "folder", "unzipit_path": "", "unzipit_url": "", "zip_cache_mb": 48,
+    "memos_enabled": False, "memos_url": "", "memos_token": "", "memos_visibility": "PRIVATE", "memos_max_upload_mb": 30,
 }
 CONFIG_ALIASES = {
     "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
@@ -937,7 +938,8 @@ CONFIG_ALIASES = {
     "view": "default_view", "layout": "default_view", "cols": "columns", "width": "feed_width",
     "autoplay": "video_autoplay", "ignore_folders": "ignored_folders", "exclude_folders": "ignored_folders",
     "ignore": "ignored_folders", "exclude": "ignored_folders", "zip": "zip_support", "archives": "zip_support",
-    "zip_mode": "zip_post_mode", "unzipit": "unzipit_path", "icon": "app_icon", "apple_touch_icon": "app_icon",
+    "zip_mode": "zip_post_mode", "unzipit": "unzipit_path", "memos": "memos_enabled", "memo_url": "memos_url",
+    "memo_token": "memos_token", "memo_visibility": "memos_visibility", "icon": "app_icon", "apple_touch_icon": "app_icon",
 }
 
 
@@ -1306,6 +1308,17 @@ body{background:radial-gradient(ellipse 70% 30rem at 50% -14rem,color-mix(in srg
 .lb-need{position:absolute;inset:0;z-index:2;display:grid;place-content:center;justify-items:center;gap:14px;padding:24px;text-align:center;color:var(--fg);font-size:14px}
 .lb-need .ic{width:40px;height:40px;color:var(--mauve)}
 .lb-need p{max-width:440px;margin:0}
+
+/* ---------- Nút "Post to Memos" ---------- */
+.btn-memos{display:inline-flex;align-items:center;gap:7px;max-width:52vw;padding:6px 11px;border:1px solid color-mix(in srgb,var(--blue) 40%,var(--surface1));border-radius:9px;background:color-mix(in srgb,var(--blue) 10%,var(--surface0));color:var(--text);font-size:11px;font-weight:700}
+.btn-memos .ic{width:14px;height:14px}
+.btn-memos .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-memos:hover:not(:disabled){border-color:var(--blue);background:color-mix(in srgb,var(--blue) 18%,var(--surface0))}
+.btn-memos:disabled{cursor:progress}
+.btn-memos.is-busy{opacity:.85}
+.btn-memos.is-done{border-color:color-mix(in srgb,var(--green) 55%,var(--surface1));background:color-mix(in srgb,var(--green) 14%,var(--surface0))}
+.btn-memos.is-error{border-color:color-mix(in srgb,var(--red) 55%,var(--surface1));background:color-mix(in srgb,var(--red) 12%,var(--surface0))}
+.feed.grid .btn-memos{display:none}
 '''
 
 BODY = r'''</style>
@@ -1502,6 +1515,7 @@ __SPRITE__
       <li>Lưới masonry cân cột thật, chọn số cột; ảnh có kích thước sẵn nên trang không bị nhảy khi tải.</li>
       <li>Xem ảnh: phóng to/kéo, chụm 2 ngón, trình chiếu, toàn màn hình, tải xuống, bảng thông tin, tải trước ảnh kế bên.</li>
       <li>Tìm kiếm có toán tử (is:video, is:gif, is:multi, is:liked, is:note), duyệt bằng phím mũi tên.</li>
+      <li>Mới ở 3.4: nút <b>Post to Memos</b> trên từng bài (khi cấu hình Memos và mở qua http/https): đăng nội dung kèm ảnh/video lên Memos.</li>
       <li>Mới ở 3.3: xem trực tiếp ảnh/video trong file <b>.zip / .cbz</b> như thư mục ảo (giải nén từng file khi cần bằng unzipit, tự giải phóng bộ nhớ).</li>
       <li>Mới ở 3.2: <b>bộ lọc đã lưu</b> (thêm, xóa, đổi tên, có trong file sao lưu), icon Màn hình chính iOS, loại trừ thư mục khi quét.</li>
       <li>Mới ở 3.1: nút <b>Lọc danh sách</b> (Shift+Enter) chỉ hiện các bài khớp tìm kiếm, kèm thanh trạng thái để sửa hoặc bỏ lọc.</li>
@@ -1515,7 +1529,7 @@ __SPRITE__
 __UNZIPIT_INLINE__
 <script>
 'use strict';
-const POSTS=__POSTS__,BASE=__BASE__,ARCHIVES=__ARCHIVES__,ARCHIVE_TITLE=__ARCHIVE_TITLE_JSON__,FLAGS=__FLAGS__,DEFAULTS=__DEFAULTS__;
+const POSTS=__POSTS__,BASE=__BASE__,ARCHIVES=__ARCHIVES__,MEMOS=__MEMOS__,ARCHIVE_TITLE=__ARCHIVE_TITLE_JSON__,FLAGS=__FLAGS__,DEFAULTS=__DEFAULTS__;
 const $=id=>document.getElementById(id);
 const VIDEO_RE=/\.(mp4|webm|mov|m4v|ogv)$/i,GIF_RE=/\.gif$/i;
 const kindOf=n=>VIDEO_RE.test(n)?2:GIF_RE.test(n)?1:0;
@@ -1524,7 +1538,7 @@ const baseName=p=>p.slice(p.lastIndexOf('/')+1);
 const urlOf=rel=>BASE+rel.split('/').map(encodeURIComponent).join('/');
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const K=k=>`tumblr_archive_${FINGERPRINT}_${k}`;
-const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3'),saved:K('saved_filters_v1')};
+const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3'),saved:K('saved_filters_v1'),memos:K('memos_posted_v1')};
 const feed=$('feed'),sentinel=$('loadSentinel'),header=$('siteHeader'),toastEl=$('toast');
 document.querySelectorAll('[data-ic]').forEach(el=>el.insertAdjacentHTML('afterbegin',ic(el.dataset.ic)));
 
@@ -1619,8 +1633,9 @@ function makeCard(idx,grid){
   if(p.s){const src=document.createElement('span');src.className='post-source';src.title='Thư mục: '+p.s;src.innerHTML=ic('folder');const t=document.createElement('span');t.textContent=p.s;src.append(t);foot.append(src)}
   if(p.z!=null){const z=document.createElement('span');z.className='post-source post-zip';z.title='File nén: '+ARCHIVES[p.z][0];z.innerHTML=ic('package');const zt=document.createElement('span');zt.textContent=baseName(ARCHIVES[p.z][0]);z.append(zt);foot.append(z)}
   const actions=document.createElement('div');actions.className='post-actions';
-  actions.innerHTML=`<button type="button" class="btn-locate" data-act="locate" aria-label="Mở bài này tại vị trí trong archive đầy đủ">Về vị trí gốc</button><button type="button" class="like" data-act="like" aria-label="Thích bài viết" aria-pressed="${on}">${ic('heart')}</button>`;
+  actions.innerHTML=`<button type="button" class="btn-locate" data-act="locate" aria-label="Mở bài này tại vị trí trong archive đầy đủ">Về vị trí gốc</button>${MEMOS_ON?`<button type="button" class="btn-memos" data-act="memos">${ic('upload')}<span class="lbl">Post to Memos</span></button>`:''}<button type="button" class="like" data-act="like" aria-label="Thích bài viết" aria-pressed="${on}">${ic('heart')}</button>`;
   actions.querySelector('.like').classList.toggle('is-liked',on);
+  if(MEMOS_ON){const mb=actions.querySelector('.btn-memos');setMemosBtn(mb,memosPosted[p.id]?'done':'idle',memosPosted[p.id])}
   foot.append(actions);
   card.append(head,media,foot);
   if(!grid)card.style.setProperty('--est',Math.round(est)+'px');
@@ -1687,6 +1702,7 @@ feed.addEventListener('click',e=>{
   if(act==='like'){toggleLike(p.id);const b=actEl;b.classList.remove('pop');void b.offsetWidth;b.classList.add('pop');return}
   if(act==='locate'){leaveLiked(idx);toast('Đã mở bài tại vị trí trong archive');return}
   if(act==='open'){openLightbox(idx,+actEl.closest('.media-item').dataset.j);return}
+  if(act==='memos'){postToMemos(idx,actEl);return}
   if(act==='zplay'){const v=actEl.parentElement.querySelector('video');if(v)zipPlay(v);return}
   if(act==='zipneed'){openZipDlg(+actEl.dataset.ai);return}
   if(e.target.closest('.post-no')){const link=location.href.split('#')[0]+'#p'+(idx+1);copyText(link).then(ok=>toast(ok?`Đã sao chép liên kết bài ${idx+1}`:'Không sao chép được liên kết'));return}
@@ -2100,6 +2116,77 @@ if(ARCH_ON){
   addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length){e.preventDefault();onZipFiles(e.dataTransfer.files)}});
 }else{$('zipBtn').remove()}
 
+/* ---------- Đăng bài lên Memos (API v1, Memos v0.31) ----------
+   Cấu hình (URL, token PAT, visibility) do build_archive.py truyền sẵn qua biến MEMOS — không hỏi bằng prompt().
+   Nút chỉ hiện khi có đủ cấu hình VÀ trang chạy qua http/https (file:// bị bỏ qua để tránh lỗi CORS/origin).
+   Luồng: (1) với từng ảnh/video: lấy Blob → POST /api/v1/attachments (JSON, base64) → lấy name "attachments/{uid}";
+          (2) POST /api/v1/memos {content, visibility, attachments:[{name}]};
+          (3) dự phòng: nếu memo trả về chưa kèm đủ tệp → PATCH /api/v1/memos/{id}/attachments. */
+const MEMOS_ON=!!MEMOS&&!!MEMOS.url&&!!MEMOS.token&&/^https?:$/.test(location.protocol);
+let memosPosted=readJSON(STORE.memos,{});if(!memosPosted||typeof memosPosted!=='object'||Array.isArray(memosPosted))memosPosted={};
+const memosErr=(code,msg)=>Object.assign(new Error(msg),{code});
+function setMemosBtn(btn,state,info){
+  if(!btn)return;const lab=btn.querySelector('.lbl');btn.classList.remove('is-busy','is-done','is-error');btn.disabled=false;
+  if(state==='busy'){btn.classList.add('is-busy');btn.disabled=true;lab.textContent='⏳ Posting...'+(info?' '+info:'');btn.title='Đang đăng lên Memos…'}
+  else if(state==='done'){btn.classList.add('is-done');lab.textContent='✅ Posted!';btn.title='Đã đăng lên Memos: '+MEMOS.url+'/'+info+' (bấm để đăng thêm một bản mới)'}
+  else if(state==='error'){btn.classList.add('is-error');lab.textContent='❌ '+(info.length>40?info.slice(0,39)+'…':info);btn.title=info}
+  else{lab.textContent='Post to Memos';btn.title='Đăng bài này (kèm ảnh/video) lên Memos'}
+}
+async function memosApi(path,method,body){
+  let r;
+  try{r=await fetch(MEMOS.url+path,{method,headers:{'Authorization':'Bearer '+MEMOS.token,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(body)})}
+  catch(e){throw memosErr('NET','Không kết nối được Memos — kiểm tra memos_url, CORS và http/https (trang https không gọi được Memos http)')}
+  const text=await r.text();let data=null;try{data=text?JSON.parse(text):null}catch(e){}
+  if(!r.ok){
+    const msg=(data&&data.message)||text.slice(0,160)||r.statusText;
+    const hint=r.status===401?'Token không hợp lệ hoặc đã hết hạn':r.status===403?'Token không đủ quyền':r.status===413?'Tệp quá lớn so với giới hạn của máy chủ':r.status===404?'Không thấy API (sai memos_url hoặc phiên bản Memos)':null;
+    throw memosErr('HTTP'+r.status,`${r.status} ${hint||msg}${hint&&msg&&msg!==r.statusText?' ('+String(msg).slice(0,80)+')':''}`);
+  }
+  return data;
+}
+const blobToB64=blob=>new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>{const s=String(fr.result);res(s.slice(s.indexOf(',')+1))};fr.onerror=()=>rej(fr.error||new Error('không đọc được tệp'));fr.readAsDataURL(blob)});
+async function memosMediaBlob(m){
+  if(m[5]){const h=await acquireZip(m);try{const r=await fetch(h.url);return await r.blob()}finally{h.release()}}   // media trong .zip/.cbz: giải nén đúng tệp đó
+  let r;try{r=await fetch(urlOf(m[0]))}catch(e){throw memosErr('MEDIA','Không đọc được '+baseName(m[0]))}
+  if(!r.ok)throw memosErr('MEDIA',`Không đọc được ${baseName(m[0])} (HTTP ${r.status})`);
+  return await r.blob();
+}
+function memosContent(idx){
+  const p=POSTS[idx],notes=p.nm?Object.keys(p.nm).sort((a,b)=>a-b).map(k=>p.nm[k]).filter(Boolean):[];
+  return notes.join('\n\n')||`${ARCHIVE_TITLE} · #${idx+1}`;   // Memos không nhận memo rỗng
+}
+async function postToMemos(idx,btn){
+  if(!MEMOS_ON||!btn||btn.disabled)return;
+  const p=POSTS[idx],prev=memosPosted[p.id];
+  if(prev&&!confirm(`Bài #${idx+1} đã được đăng lên Memos (${prev}).\nĐăng thêm một memo mới?`))return;
+  setMemosBtn(btn,'busy');
+  try{
+    const names=[];
+    for(let i=0;i<p.m.length;i++){
+      const m=p.m[i],fname=baseName(m[5]?m[5][1]:m[0]);
+      if(p.m.length>1)setMemosBtn(btn,'busy',`${i+1}/${p.m.length}`);
+      const blob=await memosMediaBlob(m);
+      if(blob.size>MEMOS.maxMB*1048576)throw memosErr('SIZE',`“${fname}” (${fmtSize(blob.size)}) vượt giới hạn ${MEMOS.maxMB} MB`);
+      const type=blob.type&&blob.type!=='application/octet-stream'?blob.type:mimeOf(fname);
+      const att=await memosApi('/api/v1/attachments','POST',{filename:fname,type,content:await blobToB64(blob)});
+      if(!att||!att.name)throw memosErr('API','Memos không trả về tên tệp đính kèm');
+      names.push(att.name);
+    }
+    setMemosBtn(btn,'busy','tạo memo…');
+    const memo=await memosApi('/api/v1/memos','POST',{content:memosContent(idx),visibility:MEMOS.visibility,attachments:names.map(name=>({name}))});
+    if(!memo||!memo.name)throw memosErr('API','Memos không trả về tên memo');
+    if(names.length&&!(memo.attachments&&memo.attachments.length>=names.length)){
+      try{await memosApi('/api/v1/'+memo.name+'/attachments','PATCH',{name:memo.name,attachments:names.map(name=>({name}))})}
+      catch(e){throw memosErr('LINK','Đã tạo '+memo.name+' nhưng chưa gắn được tệp: '+e.message)}
+    }
+    memosPosted[p.id]=memo.name;save(STORE.memos,memosPosted);
+    setMemosBtn(btn,'done',memo.name);toast('Đã đăng lên Memos: '+memo.name);
+  }catch(e){
+    const msg=(e&&e.message)||String(e);setMemosBtn(btn,'error',msg);toast('Đăng Memos thất bại: '+msg);
+    setTimeout(()=>{if(btn.isConnected&&btn.classList.contains('is-error'))setMemosBtn(btn,memosPosted[p.id]?'done':'idle',memosPosted[p.id])},7000);
+  }
+}
+
 /* ---------- Xem ảnh phóng to ---------- */
 const lightbox=$('lightbox'),lbStage=$('lbStage'),lbImg=$('lbImg'),lbVideo=$('lbVideo'),lbInfo=$('lbInfo');
 const lb={open:false,list:[],i:0,scale:1,tx:0,ty:0,slide:false,slideT:0,idleT:0,pushed:false,skipPop:false,token:0,info:false,hold:null,holdKind:-1,needAi:null,pre:new Map()},lbNeed=$('lbNeed');
@@ -2503,6 +2590,11 @@ class Options(NamedTuple):
     unzipit_path: str
     unzipit_url: str
     zip_cache_mb: int
+    memos_enabled: bool
+    memos_url: str
+    memos_token: str
+    memos_visibility: str
+    memos_max_upload_mb: int
 
 
 def render_sprite() -> str:
@@ -2567,7 +2659,7 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
         used_notes: set[Path] = set()
         for group_key, files in group_media(media, opts.zip_post_mode):
             post_id = f"{root_rel}::{group_key}" if multi_root else group_key
-            items, notes = [], {}
+            items, notes, raw_notes = [], {}, {}
             for position, mf in enumerate(files):
                 out_rel = posixpath.normpath(posixpath.join(root_rel, mf.rel))
                 width, height = sizes.get(media_key(mf), (0, 0))
@@ -2584,6 +2676,8 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
                         text = ""
                     if text.strip():
                         notes[str(position)] = markdown_to_html(text)
+                        if memos_active(opts):   # chỉ giữ Markdown gốc khi bật Memos (để đăng đúng nội dung ghi chú)
+                            raw_notes[str(position)] = text.strip()[:60000]
             parent_parts = posixpath.dirname(files[0].rel)
             bucket = labels[folder]
             if opts.folder_filter_depth > 0 and parent_parts:
@@ -2593,6 +2687,8 @@ def collect_entries(images_dirs: list[Path], output: Path, opts: Options, cache:
                 post["z"] = archive_index[(folder, files[0].zip[0])]
             if notes:
                 post["n"] = notes
+            if raw_notes:
+                post["nm"] = raw_notes
             if multi_root:
                 post["s"] = labels[folder]
             entries.append({
@@ -2624,6 +2720,11 @@ __APP_META__
 <title>__ARCHIVE_TITLE__</title>__FAVICON_LINK__
 <style>
 """
+
+
+def memos_active(opts: Options) -> bool:
+    """Tích hợp Memos chỉ bật khi đủ cả ba: memos_enabled, memos_url, memos_token."""
+    return bool(opts.memos_enabled and opts.memos_url and opts.memos_token)
 
 
 def find_local_unzipit(opts: Options, dirs: list[Path], warn) -> str | None:
@@ -2690,6 +2791,13 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
                 f'<link rel="apple-touch-icon" sizes="{icon_w}x{icon_h}" href="{icon_uri}">')
     stats["icon"] = icon_kind
     # --- Thư viện unzipit cho file .zip/.cbz (chỉ nhúng khi archive thật sự có file nén) ---
+    memos_cfg = None
+    if opts.memos_enabled:
+        if memos_active(opts):
+            memos_cfg = {"url": opts.memos_url, "token": opts.memos_token, "visibility": opts.memos_visibility, "maxMB": opts.memos_max_upload_mb}
+        else:
+            print("Cảnh báo: memos_enabled = true nhưng thiếu memos_url hoặc memos_token (hoặc biến môi trường MEMOS_TOKEN) — đã tắt tích hợp Memos.", file=sys.stderr)
+    stats["memos"] = memos_cfg["url"] if memos_cfg else None
     zip_flags = None
     unzipit_inline = ""
     if stats["archives"]:
@@ -2719,7 +2827,7 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
         "AUTO_THEMES": js_json(auto_themes), "FLAGS": js_json(flags), "DEFAULTS": js_json(defaults),
         "COLOR_SCHEME": theme["scheme"], "THEME_COLOR": theme["mantle"], "FAVICON_LINK": favicon_link,
         "HEADER_STICKY_CLASS": "" if opts.sticky_header else "header-not-sticky", "TOTAL_POSTS": str(len(posts)),
-        "VERSION": VERSION, "APP_META": app_meta, "ARCHIVES": js_json(stats["archives"]), "UNZIPIT_INLINE": unzipit_inline, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
+        "VERSION": VERSION, "APP_META": app_meta, "ARCHIVES": js_json(stats["archives"]), "MEMOS": js_json(memos_cfg), "UNZIPIT_INLINE": unzipit_inline, "FEED_WIDTH": str(opts.feed_width), "SPRITE": render_sprite(), "THEME_OPTIONS": theme_options,
     }
     # Thay một lượt: dữ liệu người dùng (tên file, ghi chú) không bao giờ bị quét lại tìm placeholder.
     html = re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), m.group(0)), HTML_HEAD + CSS + BODY)
@@ -2803,6 +2911,13 @@ def build_options(args, config: dict) -> Options:
     sort_by = {"date": "created", "created_at": "created", "newest": "created_desc", "latest": "created_desc"}.get(sort_by, sort_by)
     if sort_by not in ("name", "created", "created_desc"):
         raise ValueError("sort_by phải là name, created hoặc created_desc")
+    memos_url = str(config.get("memos_url") or "").strip().rstrip("/")
+    if memos_url and not re.match(r"^https?://[^\s/]+", memos_url):
+        raise ValueError('memos_url phải bắt đầu bằng http:// hoặc https://, ví dụ "https://memos.example.com"')
+    memos_token = str(config.get("memos_token") or os.environ.get("MEMOS_TOKEN") or "").strip()
+    memos_visibility = str(config.get("memos_visibility") or "PRIVATE").strip().upper()
+    if memos_visibility not in ("PRIVATE", "PROTECTED", "PUBLIC"):
+        raise ValueError('memos_visibility phải là "PRIVATE", "PROTECTED" hoặc "PUBLIC"')
     zip_mode = str(config.get("zip_post_mode") or "folder").strip().casefold()
     zip_mode = {"file": "folder", "directory": "folder", "zip": "archive", "album": "archive"}.get(zip_mode, zip_mode)
     if zip_mode not in ("folder", "archive"):
@@ -2831,6 +2946,8 @@ def build_options(args, config: dict) -> Options:
         zip_support=zip_enabled(args, config), zip_post_mode=zip_mode,
         unzipit_path=str(args.unzipit) if getattr(args, "unzipit", None) else str(config.get("unzipit_path") or ""),
         unzipit_url=unzipit_url, zip_cache_mb=integer("zip_cache_mb", 0, 4096),
+        memos_enabled=truthy("memos_enabled"), memos_url=memos_url, memos_token=memos_token,
+        memos_visibility=memos_visibility, memos_max_upload_mb=integer("memos_max_upload_mb", 1, 2048),
     )
 
 
@@ -2859,6 +2976,9 @@ def run_build(args, script_dir: Path) -> tuple[int, Path, Options, list[Path]]:
         if stats["archives"]:
             print(f"Đã lập chỉ mục {len(stats['archives'])} file nén (.zip/.cbz) với {stats['zip_entries']} media bên trong, "
                   f"đọc bằng unzipit ({'nhúng local' if stats.get('unzipit_local') else 'tải từ CDN khi cần'}).")
+        if stats.get("memos"):
+            print(f"Memos: đã bật nút \"Post to Memos\" → {stats['memos']} (chỉ hiện khi mở qua http/https). "
+                  f"CẢNH BÁO: token được nhúng trong index.html, đừng chia sẻ/đăng công khai file này.")
         if stats["skipped_dirs"]:
             print(f"Đã bỏ qua {stats['skipped_dirs']} thư mục theo ignored_folders / --ignore.")
         if stats["unknown_dims"]:

@@ -1,6 +1,6 @@
-# Tumblr-style Media Archive (build_archive.py v3.3)
+# Tumblr-style Media Archive (build_archive.py v3.4)
 
-Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz…
+Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz, đăng bài lên Memos…
 
 Không cần cài thêm gì: chỉ cần **Python 3.11 trở lên** (đọc cấu hình bằng `tomllib` có sẵn trong thư viện chuẩn, không phụ thuộc thư viện ngoài). Chạy bằng Python cũ hơn, script sẽ báo lỗi rõ ràng và dừng.
 
@@ -50,6 +50,11 @@ Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 | | `zip_post_mode` | `"folder"` (gom như thư mục) \| `"archive"` (mỗi file nén là một bài) | `"folder"` |
 | | `zip_cache_mb` | Ngưỡng RAM (MB) giữ lại ảnh đã giải nén nhưng không còn hiển thị | `48` |
 | | `unzipit_path` / `unzipit_url` | File unzipit local để nhúng / địa chỉ CDN | tự nhận / jsDelivr |
+| Memos | `memos_enabled` | `true` \| `false` — bật nút "Post to Memos" | `false` |
+| | `memos_url` | Địa chỉ instance, ví dụ `"https://memos.example.com"` | — |
+| | `memos_token` | Personal Access Token (hoặc biến môi trường `MEMOS_TOKEN`) | — |
+| | `memos_visibility` | `"PRIVATE"` \| `"PROTECTED"` \| `"PUBLIC"` | `"PRIVATE"` |
+| | `memos_max_upload_mb` | Tệp lớn hơn bị chặn ở trình duyệt | `30` |
 | Loại trừ | `ignored_folders` | Danh sách tên/mẫu thư mục bỏ qua khi quét | `[]` |
 | Icon iOS | `app_icon` | Đường dẫn file PNG làm icon Màn hình chính | tự tìm / tự vẽ |
 | | `app_name` | Tên ngắn dưới icon | `title` |
@@ -345,7 +350,42 @@ Cách tiện hơn: **mở trang qua máy chủ web** (ví dụ `python -m http.s
 
 ---
 
-## 10. Hiệu năng và mẹo cho bộ sưu tập lớn
+## 10. Đăng bài lên Memos (mới ở 3.4)
+
+Mỗi thẻ bài có nút **Post to Memos**: đăng nội dung bài kèm toàn bộ ảnh/video lên instance [Memos](https://usememos.com) của bạn (API v1, phiên bản v0.31).
+
+```toml
+memos_enabled = true
+memos_url = "https://memos.example.com"
+memos_token = "memos_pat_xxxxxxxx"      # Memos → Settings → My Account → Access Tokens
+memos_visibility = "PRIVATE"            # hoặc "PROTECTED" / "PUBLIC"
+```
+
+**Khi nào nút hiện:** chỉ khi `memos_enabled = true`, có đủ `memos_url` và `memos_token` **và** trang được mở qua **http/https**. Mở bằng `file://` thì nút không được vẽ ra (tránh lỗi CORS). Thiếu URL/token thì build cảnh báo và tắt tích hợp. Cấu hình được truyền sẵn vào JavaScript, nên **không có hộp thoại hỏi lại** URL/token. Nút không hiện ở chế độ lưới.
+
+**Luồng đăng bài** (`postToMemos`):
+
+1. Với từng ảnh/video của bài: lấy tệp thành Blob (media trong `.zip/.cbz` thì giải nén đúng tệp đó) → `POST {memos_url}/api/v1/attachments` (header `Authorization: Bearer <token>`, body JSON `{filename, type, content: <base64>}`) → nhận tên tệp đính kèm `attachments/{uid}`.
+2. `POST {memos_url}/api/v1/memos` với `{content, visibility, attachments:[{name}]}`.
+3. Dự phòng: nếu máy chủ trả memo chưa kèm đủ tệp, gọi `PATCH /api/v1/memos/{id}/attachments` để gắn.
+
+**Nội dung memo:** nếu bài có ghi chú `.md` thì dùng **Markdown gốc** của ghi chú; không có thì dùng dòng mặc định `<tên archive> · #<số bài>` (Memos không nhận memo rỗng). Đăng toàn bộ media của bài (kể cả khi đang lọc loại media).
+
+**Trạng thái nút:** `Post to Memos` → `⏳ Posting...` (kèm tiến độ `2/5` khi nhiều tệp; nút bị khóa để không bấm đúp) → `✅ Posted!`. Lỗi hiện `❌ <lý do>` (chi tiết trong tooltip và thông báo), nút mở khóa để thử lại và tự trở về trạng thái ban đầu sau ~7 giây. Các lỗi được phân loại: 401 token sai/hết hạn, 403 thiếu quyền, 404 sai URL/phiên bản, 413 tệp quá lớn, không kết nối/CORS, tệp vượt `memos_max_upload_mb`, memo đã tạo nhưng chưa gắn được tệp. Bài đã đăng được ghi nhớ trong trình duyệt (hiện `✅ Posted!` sau khi tải lại, tooltip có liên kết memo); bấm lần nữa sẽ hỏi xác nhận trước khi đăng thêm bản mới.
+
+> **Về endpoint upload:** yêu cầu ban đầu nhắc `/api/v1/assets`, nhưng API Memos (đã đối chiếu với tài liệu và ví dụ chính thức của Memos từ v0.25 đến v0.31) dùng **`/api/v1/attachments`** (`/resources` đã bị bỏ, không có `/assets`). Code dùng `/api/v1/attachments`. Upload dùng **JSON + base64** thay vì `multipart/form-data` vì đã có báo cáo upload multipart bị 401 với Personal Access Token.
+
+### Bảo mật và điều kiện để chạy
+
+- **Token nằm trong `index.html`** (JavaScript ở trình duyệt cần nó để gọi API). Ai có file hoặc truy cập được trang đều dùng được token. Chỉ dùng cho archive riêng tư, tạo **một token riêng** (thu hồi được) cho việc này, tuyệt đối không đăng `index.html` lên nơi công khai. Có thể để trống `memos_token` và đặt biến môi trường `MEMOS_TOKEN` khi build để khỏi ghi token vào `config.toml` (token vẫn có trong HTML sinh ra).
+- **CORS:** trang gọi Memos từ một địa chỉ khác nên Memos (hoặc reverse proxy phía trước) phải cho phép CORS từ địa chỉ mở archive, bao gồm header `Authorization`/`Content-Type` trong preflight. Cách đơn giản nhất: để archive và Memos sau cùng một reverse proxy (cùng origin).
+- **Mixed content:** trang `https://` không gọi được Memos `http://`. Dùng cùng giao thức.
+- **Giới hạn:** mỗi tệp bị chặn nếu lớn hơn `memos_max_upload_mb` (đặt khớp giới hạn upload trên Memos). Tệp được mã hóa base64 (lớn thêm ~33%) và gửi trong một request, nên video rất lớn không phù hợp; tính năng upload theo từng đoạn (chunk) của v0.31 chưa được hỗ trợ. Tệp đã tải lên mà bước tạo memo thất bại sẽ còn lại trên Memos (tệp đính kèm mồ côi, xóa trong phần quản lý tệp của Memos).
+- **Về việc kiểm thử:** môi trường phát triển không có Memos thật, nên toàn bộ luồng được kiểm chứng với một máy chủ Memos giả lập dựng đúng theo hợp đồng API đã đối chiếu từ tài liệu (Bearer, JSON base64, `visibility`, tên attachment, CORS preflight, các chế độ lỗi). Hãy thử đăng một bài với `memos_visibility = "PRIVATE"` trước; nếu Memos của bạn trả lỗi 4xx, thông điệp lỗi hiển thị trong tooltip của nút.
+
+---
+
+## 11. Hiệu năng và mẹo cho bộ sưu tập lớn
 
 - Trang chỉ dựng vài bài đầu và tải thêm khi cuộn; ảnh dùng lazy-load. Ảnh đã có kích thước từ lúc build nên không bị nhảy layout.
 - Kiểm thử với 20.000 bài (32.000 media): build khoảng 1,4 giây (bản cũ ~8,6 giây); `index.html` ~3,6 MB (bản cũ ~6,5 MB); trang mở nhanh hơn ~40%.
@@ -356,7 +396,7 @@ Cách tiện hơn: **mở trang qua máy chủ web** (ví dụ `python -m http.s
 
 ---
 
-## 11. Xử lý sự cố
+## 12. Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -374,11 +414,17 @@ Cách tiện hơn: **mở trang qua máy chủ web** (ví dụ `python -m http.s
 | "không tải được thư viện unzipit" | Không có mạng/CDN bị chặn: đặt `unzipit.module.js` cạnh `config.toml` rồi build lại để nhúng sẵn. |
 | Ảnh trong file nén tải chậm / báo "không hỗ trợ Range" | Máy chủ không hỗ trợ HTTP Range nên phải tải cả file nén; dùng máy chủ có Range (nginx, Caddy…). |
 | File nén bị bỏ qua khi build | Xem cảnh báo: file hỏng, có mật khẩu hoặc nén bằng bzip2/lzma (chỉ hỗ trợ store/deflate). |
+| Không thấy nút "Post to Memos" | Kiểm tra đủ `memos_enabled = true`, `memos_url`, `memos_token`, build lại, và mở trang qua http/https (không phải `file://`); không hiện ở chế độ lưới. |
+| Nút báo "Không kết nối được Memos" | Sai `memos_url`, Memos chưa cho phép CORS từ địa chỉ này, hoặc trang https gọi Memos http. Xem mục 10. |
+| Nút báo 401 / 403 | Token sai, hết hạn hoặc thiếu quyền: tạo lại Personal Access Token rồi build lại. |
 | Muốn build lại từ đầu | `python build_archive.py --clear-cache`. |
 
 ---
 
-## 12. Có gì mới
+## 13. Có gì mới
+
+### 3.4
+- **Đăng bài lên Memos:** nút "Post to Memos" trên từng bài (chỉ khi cấu hình đủ và mở qua http/https), upload tệp qua `/api/v1/attachments` rồi tạo memo qua `/api/v1/memos`, có trạng thái ⏳/✅/❌, chống bấm đúp, ghi nhớ bài đã đăng. Cấu hình: `memos_enabled`, `memos_url`, `memos_token` (hoặc `MEMOS_TOKEN`), `memos_visibility`, `memos_max_upload_mb`.
 
 ### 3.3
 - **Xem trực tiếp `.zip` / `.cbz` như thư mục ảo:** lập chỉ mục bằng `zipfile` (không giải nén ra đĩa), giải nén từng file khi cần bằng unzipit, cache file nén và Blob, tự revoke để không tràn RAM, hộp thoại chọn file khi mở bằng `file://`, đọc qua HTTP Range khi có máy chủ.
