@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tumblr-style offline media archive builder (v3.5).
+"""Tumblr-style offline media archive builder (v3.6).
 
 Đọc ảnh/video (và ghi chú .md đi kèm) từ một hoặc nhiều thư mục rồi sinh ra
 MỘT file HTML tĩnh, chạy hoàn toàn offline. Cấu hình qua config.toml cạnh script (cần Python 3.11+).
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-VERSION = "3.5"
+VERSION = "3.6"
 
 THEMES = {
     "mocha": {"base":"#1e1e2e","mantle":"#181825","crust":"#11111b","surface0":"#313244","surface1":"#45475a","text":"#cdd6f4","subtext":"#a6adc8","mauve":"#cba6f7","pink":"#f5c2e7","red":"#f38ba8","peach":"#fab387","green":"#a6e3a1","blue":"#89b4fa","lavender":"#b4befe","scheme":"dark"},
@@ -1014,6 +1014,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "zip_support": True, "zip_post_mode": "folder", "unzipit_path": "", "unzipit_url": "", "zip_cache_mb": 48,
     "memos_enabled": False, "memos_url": "", "memos_token": "", "memos_visibility": "PRIVATE", "memos_max_upload_mb": 30, "memos_tags": [],
     "min_file_size_kb": 10, "min_width": 300, "min_height": 300, "corrupt_check": "fast",
+    "mobile_friendly": False, "mobile_autohide_bars": True, "hide_footer_bar": False,
 }
 CONFIG_ALIASES = {
     "name": "title", "website_name": "title", "image_dir": "images_dir", "images": "images_dir",
@@ -1023,6 +1024,7 @@ CONFIG_ALIASES = {
     "ignore": "ignored_folders", "exclude": "ignored_folders", "zip": "zip_support", "archives": "zip_support",
     "zip_mode": "zip_post_mode", "unzipit": "unzipit_path", "memos": "memos_enabled", "memo_url": "memos_url",
     "memo_token": "memos_token", "memo_visibility": "memos_visibility", "memo_tags": "memos_tags",
+    "mobile": "mobile_friendly", "mobile_ui": "mobile_friendly", "autohide_bars": "mobile_autohide_bars", "autohide": "mobile_autohide_bars", "hide_footer": "hide_footer_bar", "hide_bottom_bar": "hide_footer_bar",
     "min_size_kb": "min_file_size_kb", "min_w": "min_width", "min_h": "min_height", "check_corrupt": "corrupt_check", "icon": "app_icon", "apple_touch_icon": "app_icon",
 }
 
@@ -1403,6 +1405,37 @@ body{background:radial-gradient(ellipse 70% 30rem at 50% -14rem,color-mix(in srg
 .btn-memos.is-done{border-color:color-mix(in srgb,var(--green) 55%,var(--surface1));background:color-mix(in srgb,var(--green) 14%,var(--surface0))}
 .btn-memos.is-error{border-color:color-mix(in srgb,var(--red) 55%,var(--surface1));background:color-mix(in srgb,var(--red) 12%,var(--surface0))}
 .feed.grid .btn-memos{display:none}
+
+/* ---------- Chế độ thân thiện điện thoại (config.toml: mobile_friendly = true) ----------
+   Mọi quy tắc dưới đây nằm sau body.mobile-ui, nên khi tắt thì giao diện giữ nguyên như bản cũ. */
+.fab{position:fixed;z-index:11;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));display:none;place-items:center;width:46px;height:46px;padding:0;border:1px solid color-mix(in srgb,var(--surface1) 75%,transparent);border-radius:50%;background:color-mix(in srgb,var(--mantle) 82%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);color:var(--text);font-size:21px;box-shadow:0 8px 22px #0004;transition:transform .75s var(--ease),opacity .75s var(--ease)}
+.fab:hover{border-color:var(--mauve)}
+body.mobile-ui.footer-hidden:not(.footer-peek) .fab{display:grid}
+body.mobile-ui.footer-hidden .controls{display:none}
+body.mobile-ui.footer-hidden.footer-peek .controls{display:flex}
+body.mobile-ui.footer-hidden{padding-bottom:calc(28px + env(safe-area-inset-bottom,0px))}
+@media(max-width:799px){
+  /* Thanh trên/dưới: ẩn nhanh khi cuộn, hiện lại CHẬM (≈0,75 giây) sau khi dừng. Quy tắc transition của .bars-away chỉ áp dụng lúc đi vào trạng thái ẩn. */
+  body.mobile-ui .site-header,body.mobile-ui .controls{transition:transform .75s var(--ease)}
+  body.mobile-ui.bars-away .site-header{transform:translateY(-101%);transition:transform .2s ease-in}
+  body.mobile-ui.bars-away .controls{transform:translateY(calc(101% + env(safe-area-inset-bottom,0px)));transition:transform .2s ease-in}
+  body.mobile-ui.bars-away .fab{transform:translateY(calc(100% + 40px));opacity:0;transition:transform .2s ease-in,opacity .2s}
+  /* Thân thiện cảm ứng: lề hẹp hơn để ảnh to hơn, vùng chạm ≥ 44px, bỏ độ trễ chạm */
+  body.mobile-ui{--r-card:14px;--card-gap:14px;padding-left:max(6px,env(safe-area-inset-left,0px));padding-right:max(6px,env(safe-area-inset-right,0px))}
+  body.mobile-ui .site-header{margin-left:-6px;margin-right:-6px}
+  body.mobile-ui .feed{margin-top:10px}
+  body.mobile-ui :is(button,a,label,summary,select){touch-action:manipulation}
+  body.mobile-ui .like{width:44px;height:44px}
+  body.mobile-ui .post-no{padding:10px 12px}
+  body.mobile-ui .btn-locate,body.mobile-ui .btn-memos,body.mobile-ui .post-source{min-height:36px}
+  body.mobile-ui .tb{height:46px}
+  body.mobile-ui .check{padding:12px 10px}
+  body.mobile-ui .item{padding:13px 11px}
+  body.mobile-ui .field select{padding:11px}
+  body.mobile-ui .lb-btn{width:44px;height:44px}
+  body.mobile-ui .lb-nav{width:46px;height:46px}
+  body.mobile-ui .x-btn{width:42px;height:42px}
+}
 '''
 
 BODY = r'''</style>
@@ -1486,6 +1519,8 @@ __SPRITE__
     <label class="field">Theme<select id="themeSelect"><option value="auto">Theo hệ thống</option>__THEME_OPTIONS__</select></label>
     <label class="check"><input id="reverseChk" type="checkbox"><span>Đảo thứ tự (cuối lên trước)</span></label>
     <label class="check"><input id="autoplayChk" type="checkbox"><span>Tự phát video (tắt tiếng) khi lướt tới</span></label>
+    <label class="check"><input id="autoHideChk" type="checkbox"><span>Tự ẩn thanh trên/dưới khi cuộn (màn hình nhỏ)</span></label>
+    <label class="check"><input id="hideFooterChk" type="checkbox"><span>Ẩn thanh chân trang (dùng nút tròn ở góc để mở lại)</span></label>
     <label class="field">Thời gian mỗi ảnh khi trình chiếu<select id="slideSel"><option value="3">3 giây</option><option value="5">5 giây</option><option value="8">8 giây</option><option value="12">12 giây</option></select></label>
     <div class="menu-sep"></div>
     <button class="item" id="zipBtn" type="button" hidden><span data-ic="package"></span>File nén (zip / cbz)…</button>
@@ -1493,6 +1528,7 @@ __SPRITE__
     <button class="item" id="helpBtn" type="button"><span data-ic="help"></span>Phím tắt &amp; trợ giúp</button>
   </div>
 </nav>
+<button class="fab" id="fab" type="button" aria-label="Mở thanh công cụ" title="Mở thanh công cụ"><span data-ic="sliders"></span></button>
 <div id="toast" role="status" aria-live="polite"></div>
 
 <section id="lightbox" role="dialog" aria-modal="true" aria-label="Xem media phóng to" tabindex="-1">
@@ -1599,6 +1635,7 @@ __SPRITE__
       <li>Lưới masonry cân cột thật, chọn số cột; ảnh có kích thước sẵn nên trang không bị nhảy khi tải.</li>
       <li>Xem ảnh: phóng to/kéo, chụm 2 ngón, trình chiếu, toàn màn hình, tải xuống, bảng thông tin, tải trước ảnh kế bên.</li>
       <li>Tìm kiếm có toán tử (is:video, is:gif, is:multi, is:liked, is:note), duyệt bằng phím mũi tên.</li>
+      <li>Mới ở 3.6: trên điện thoại, thanh trên/dưới tự ẩn khi cuộn và từ từ hiện lại khi dừng; có tùy chọn ẩn hẳn thanh chân trang.</li>
       <li>Mới ở 3.4: nút <b>Post to Memos</b> trên từng bài (khi cấu hình Memos và mở qua http/https): đăng nội dung kèm ảnh/video lên Memos.</li>
       <li>Mới ở 3.3: xem trực tiếp ảnh/video trong file <b>.zip / .cbz</b> như thư mục ảo (giải nén từng file khi cần bằng unzipit, tự giải phóng bộ nhớ).</li>
       <li>Mới ở 3.2: <b>bộ lọc đã lưu</b> (thêm, xóa, đổi tên, có trong file sao lưu), icon Màn hình chính iOS, loại trừ thư mục khi quét.</li>
@@ -1622,7 +1659,7 @@ const baseName=p=>p.slice(p.lastIndexOf('/')+1);
 const urlOf=rel=>BASE+rel.split('/').map(encodeURIComponent).join('/');
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const K=k=>`tumblr_archive_${FINGERPRINT}_${k}`;
-const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3'),saved:K('saved_filters_v1'),memos:K('memos_posted_v1')};
+const STORE={likes:K('liked_posts_v2'),position:K('position_v2'),grid:K('grid_v1'),style:K('style_v1'),prefs:K('prefs_v3'),saved:K('saved_filters_v1'),memos:K('memos_posted_v1'),ui:K('ui_v1')};
 const feed=$('feed'),sentinel=$('loadSentinel'),header=$('siteHeader'),toastEl=$('toast');
 document.querySelectorAll('[data-ic]').forEach(el=>el.insertAdjacentHTML('afterbegin',ic(el.dataset.ic)));
 
@@ -2623,6 +2660,48 @@ $('savedName').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefau
 $('savedSave').onclick=saveCurrent;$('savedClose').onclick=closeSaved;$('savedManage').onclick=openSaved;$('chipSave').onclick=openSaved;
 savedDlg.addEventListener('click',e=>{if(e.target===savedDlg)closeSaved()});
 
+/* ---------- Giao diện điện thoại: thanh trên/dưới tự ẩn khi cuộn, tùy chọn ẩn thanh chân trang ----------
+   - Màn hình nhỏ (<800px): cuộn → thanh trên trượt lên, thanh dưới trượt xuống ngay; dừng cuộn một lát → cả hai TỪ TỪ trượt về.
+     Không ẩn khi đang ở đầu trang, khi đang mở menu Lọc/Cài đặt, hoặc khi xem ảnh phóng to.
+   - "Ẩn thanh chân trang": thanh dưới biến mất hẳn; một nút tròn nhỏ ở góc dưới gọi nó ra tạm thời (tự đóng khi cuộn / chạm ra ngoài).
+   Lựa chọn của người dùng được nhớ riêng (ui_v1) và chỉ ghi các mục họ đã đổi, nên mặc định trong config.toml vẫn có hiệu lực cho mục chưa đổi. */
+const MOBILE_UI=!!DEFAULTS.mobile;   // công tắc mobile_friendly trong config.toml (mặc định tắt = giao diện cũ, không thay đổi gì)
+const mqSmall=matchMedia('(max-width: 799px)'),BARS_RETURN_MS=450;
+const uiPrefs=(()=>{const v=readJSON(STORE.ui,{});return v&&typeof v==='object'&&!Array.isArray(v)?v:{}})();
+let autoHide=typeof uiPrefs.autoHide==='boolean'?uiPrefs.autoHide:DEFAULTS.autoHide!==false;
+let hideFooter=typeof uiPrefs.hideFooter==='boolean'?uiPrefs.hideFooter:!!DEFAULTS.hideFooter;
+let barsT=0,barsLastY=0,barsReady=false;
+const setUiPref=(k,v)=>{uiPrefs[k]=v;save(STORE.ui,uiPrefs)};
+function applyFooterMode(){document.body.classList.toggle('footer-hidden',hideFooter);if(!hideFooter)document.body.classList.remove('footer-peek')}
+function showBars(){clearTimeout(barsT);document.body.classList.remove('bars-away')}
+function barsOnScroll(){
+  if(!MOBILE_UI||!barsReady)return;
+  const body=document.body,y=scrollY;
+  if(body.classList.contains('footer-peek'))body.classList.remove('footer-peek');   // thanh gọi ra tạm thời sẽ đóng khi cuộn
+  if(!autoHide||!mqSmall.matches)return;
+  if(Math.abs(y-barsLastY)<3)return;barsLastY=y;                                    // bỏ qua rung nhỏ
+  if(y<=40){showBars();return}                                                       // đầu trang: luôn hiện
+  if(document.querySelector('.menu.open')||lb.open)return;                           // đang dùng menu / xem ảnh: giữ nguyên
+  body.classList.add('bars-away');
+  clearTimeout(barsT);barsT=setTimeout(()=>body.classList.remove('bars-away'),BARS_RETURN_MS);
+}
+if(MOBILE_UI){
+document.body.classList.add('mobile-ui');
+addEventListener('scroll',barsOnScroll,{passive:true});
+(mqSmall.addEventListener?mqSmall.addEventListener.bind(mqSmall,'change'):mqSmall.addListener.bind(mqSmall))(()=>showBars());
+$('autoHideChk').checked=autoHide;$('hideFooterChk').checked=hideFooter;
+$('autoHideChk').addEventListener('change',e=>{autoHide=e.target.checked;setUiPref('autoHide',autoHide);if(!autoHide)showBars();toast(autoHide?'Thanh sẽ tự ẩn khi cuộn (màn hình nhỏ)':'Đã tắt tự ẩn thanh khi cuộn')});
+$('hideFooterChk').addEventListener('change',e=>{
+  hideFooter=e.target.checked;setUiPref('hideFooter',hideFooter);applyFooterMode();closeSettings();closeFilter();
+  toast(hideFooter?'Đã ẩn thanh chân trang — bấm nút tròn ở góc dưới để mở lại':'Đã hiện lại thanh chân trang');
+});
+$('fab').addEventListener('click',()=>{document.body.classList.add('footer-peek');showBars()});
+document.addEventListener('click',e=>{if(document.body.classList.contains('footer-peek')&&!controls.contains(e.target)&&!e.target.closest('#fab')){document.body.classList.remove('footer-peek');closeSettings();closeFilter()}});
+applyFooterMode();
+}else{   // giao diện cũ: bỏ các mục của chế độ thân thiện điện thoại
+  $('autoHideChk').closest('label').remove();$('hideFooterChk').closest('label').remove();$('fab').remove();
+}
+
 /* Dán liên kết #p123 vào tab đang mở (chỉ đổi hash, không tải lại trang) */
 addEventListener('hashchange',()=>{
   const m=/^#p(\d+)$/.exec(location.hash);if(!m||location.hash===savedHash)return;
@@ -2641,6 +2720,7 @@ computeView();rebuild();
   else if(view.length)focusIdx=view[0];
   updatePos();
   setTimeout(()=>{restoreLock=false},600);
+  setTimeout(()=>{barsLastY=scrollY;barsReady=true},900);   // sau khi khôi phục vị trí xong mới bắt đầu tự ẩn thanh
 })();
 </script>
 </body>
@@ -2688,6 +2768,9 @@ class Options(NamedTuple):
     min_width: int
     min_height: int
     corrupt_check: str
+    mobile_friendly: bool
+    mobile_autohide_bars: bool
+    hide_footer_bar: bool
 
 
 def render_sprite() -> str:
@@ -2969,7 +3052,8 @@ def generate_html(images_dirs: list[Path], output: Path, opts: Options, script_d
     theme_options = "".join(f'<option value="{key}">{html_escape(THEME_LABELS.get(key, key))}</option>' for key in THEMES)
     flags = {"filename": opts.show_filename, "created": opts.show_created_time, "size": opts.show_file_size,
              "thumbs": opts.show_video_thumbnails, "dims": opts.show_dimensions, "zip": zip_flags}
-    defaults = {"view": opts.default_view, "cols": opts.columns, "width": opts.feed_width, "autoplay": opts.video_autoplay}
+    defaults = {"view": opts.default_view, "cols": opts.columns, "width": opts.feed_width, "autoplay": opts.video_autoplay,
+                "mobile": opts.mobile_friendly, "autoHide": opts.mobile_autohide_bars, "hideFooter": opts.hide_footer_bar}
 
     values = {
         "POSTS": js_json(posts), "BASE": '""', "FINGERPRINT": json.dumps(fingerprint),
@@ -3110,6 +3194,7 @@ def build_options(args, config: dict) -> Options:
         memos_enabled=truthy("memos_enabled"), memos_url=memos_url, memos_token=memos_token,
         memos_visibility=memos_visibility, memos_max_upload_mb=integer("memos_max_upload_mb", 1, 2048),
         memos_tags=memos_tags, min_file_size_kb=quality["kb"], min_width=quality["w"], min_height=quality["h"], corrupt_check=quality["check"],
+        mobile_friendly=truthy("mobile_friendly"), mobile_autohide_bars=truthy("mobile_autohide_bars", True), hide_footer_bar=truthy("hide_footer_bar"),
     )
 
 

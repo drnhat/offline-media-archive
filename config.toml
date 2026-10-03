@@ -1,5 +1,5 @@
 # ============================================================================
-#  config.toml — cấu hình cho build_archive.py (v3.5, cần Python 3.11+)
+#  config.toml — cấu hình cho build_archive.py (v3.6, cần Python 3.11+)
 #  Đặt file này cạnh build_archive.py. Dòng bắt đầu bằng # là ghi chú.
 #  Bỏ dấu # ở đầu dòng để bật một tùy chọn; tùy chọn nào không ghi sẽ dùng mặc định.
 #
@@ -117,6 +117,22 @@ corrupt_check = "fast"
 # thích/vị trí đọc cũ có thể không còn khớp. Hãy sao lưu (phím E) trước khi build lần đầu với bản này,
 # hoặc đặt min_file_size_kb = 0, min_width = 0, min_height = 0, corrupt_check = "off" để giữ nguyên như trước.
 # Tắt nhanh toàn bộ bằng dòng lệnh: python build_archive.py --no-quality-filter
+
+# --- Giao diện thân thiện điện thoại (tùy chọn) ---------------------------------------------
+# MẶC ĐỊNH TẮT: giữ nguyên giao diện cũ, không thay đổi bất cứ điều gì. Đặt true để bật chế độ thân thiện điện thoại:
+#   - Thanh trên cùng và thanh dưới cùng TỰ ẨN khi bạn cuộn (màn hình nhỏ dưới 800px), rồi từ từ trượt
+#     trở lại khi dừng cuộn. Không ẩn khi đang ở đầu trang, đang mở menu hoặc đang xem ảnh phóng to.
+#   - Lề hai bên hẹp hơn để ảnh to hơn; nút bấm có vùng chạm tối thiểu 44px; bỏ độ trễ chạm.
+#   - Trong menu Cài đặt xuất hiện hai ô tùy chọn: "Tự ẩn thanh khi cuộn" và "Ẩn thanh chân trang".
+#     Lựa chọn của người xem được nhớ trong trình duyệt và ưu tiên hơn các giá trị mặc định bên dưới.
+mobile_friendly = false
+
+# Chỉ có hiệu lực khi mobile_friendly = true:
+# Mặc định cho việc tự ẩn thanh khi cuộn (người xem vẫn tắt/bật được trong Cài đặt).
+mobile_autohide_bars = true
+# Ẩn hẳn thanh chân trang. Khi ẩn, một nút tròn nhỏ ở góc dưới bên phải sẽ gọi thanh công cụ ra tạm thời
+# (tự đóng khi cuộn hoặc chạm ra ngoài) để vẫn dùng được Lọc, Tìm, Cài đặt…
+hide_footer_bar = false
 
 # --- Giao diện ----------------------------------------------------------------
 

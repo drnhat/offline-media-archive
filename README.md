@@ -1,6 +1,6 @@
-# Tumblr-style Media Archive (build_archive.py v3.5)
+# Tumblr-style Media Archive (build_archive.py v3.6)
 
-Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz, đăng bài lên Memos, tự lọc media lỗi/chất lượng thấp…
+Biến một thư mục ảnh/video thành **một file `index.html` duy nhất**, xem hoàn toàn offline theo phong cách Tumblr: cuộn dọc như dòng bài viết, hoặc lưới masonry, có xem ảnh phóng to, tìm kiếm, bộ lọc đã lưu, bài đã thích, sao lưu, icon Màn hình chính iPhone, xem trực tiếp ảnh/video trong file .zip / .cbz, đăng bài lên Memos, tự lọc media lỗi/chất lượng thấp, giao diện thân thiện điện thoại…
 
 Không cần cài thêm gì: chỉ cần **Python 3.11 trở lên** (đọc cấu hình bằng `tomllib` có sẵn trong thư viện chuẩn, không phụ thuộc thư viện ngoài). Chạy bằng Python cũ hơn, script sẽ báo lỗi rõ ràng và dừng.
 
@@ -50,6 +50,9 @@ Mọi tùy chọn đều có chú thích ngay trong file mẫu. Tóm tắt:
 | | `zip_post_mode` | `"folder"` (gom như thư mục) \| `"archive"` (mỗi file nén là một bài) | `"folder"` |
 | | `zip_cache_mb` | Ngưỡng RAM (MB) giữ lại ảnh đã giải nén nhưng không còn hiển thị | `48` |
 | | `unzipit_path` / `unzipit_url` | File unzipit local để nhúng / địa chỉ CDN | tự nhận / jsDelivr |
+| Điện thoại | `mobile_friendly` | `true` \| `false` — công tắc chung cho chế độ thân thiện điện thoại (**tắt = giao diện cũ**) | `false` |
+| | `mobile_autohide_bars` | Thanh trên/dưới tự ẩn khi cuộn (cần `mobile_friendly = true`) | `true` |
+| | `hide_footer_bar` | Ẩn hẳn thanh chân trang, dùng nút tròn để gọi lại (cần `mobile_friendly = true`) | `false` |
 | Chất lượng | `min_file_size_kb` | Loại file nhỏ hơn số KB này (0 = tắt; file 0 KB luôn bị loại) | `10` |
 | | `min_width` / `min_height` | Loại ảnh có chiều rộng/cao nhỏ hơn mức này (0 = tắt) | `300` / `300` |
 | | `corrupt_check` | `"fast"` \| `"full"` \| `"off"` — phát hiện file ảnh hỏng | `"fast"` |
@@ -421,7 +424,28 @@ Khi quét, script **bỏ qua** (không đưa vào archive) các media sau, áp d
 
 ---
 
-## 12. Hiệu năng và mẹo cho bộ sưu tập lớn
+## 12. Giao diện thân thiện điện thoại (mới ở 3.6)
+
+**Mặc định tắt: trang giữ nguyên giao diện cũ** (đã so sánh từng điểm ảnh với bản trước trên điện thoại và máy tính, ở trạng thái đầu trang, sau khi cuộn, mở Cài đặt và mở menu Lọc). Bật bằng một công tắc trong `config.toml`:
+
+```toml
+mobile_friendly = true       # công tắc chung; false = giao diện cũ
+mobile_autohide_bars = true  # mặc định cho việc tự ẩn thanh khi cuộn
+hide_footer_bar = false      # mặc định cho việc ẩn hẳn thanh chân trang
+```
+
+Khi `mobile_friendly = true`, trên màn hình nhỏ (dưới 800px):
+
+- **Thanh trên và thanh dưới tự ẩn khi cuộn.** Cuộn là hai thanh trượt đi ngay (≈0,2 giây); dừng cuộn khoảng nửa giây thì cả hai **từ từ trượt trở lại** (≈0,6 giây). Không ẩn khi đang ở đầu trang (≤40px), khi đang mở menu Lọc/Cài đặt, hoặc khi đang xem ảnh phóng to. Máy tính (≥800px) không bị ảnh hưởng.
+- **Ẩn thanh chân trang.** Thanh dưới biến mất hẳn để nhường chỗ cho ảnh. Một **nút tròn nhỏ ở góc dưới bên phải** gọi thanh công cụ ra tạm thời: bấm nút, dùng Lọc / Tìm / Cài đặt…, rồi thanh tự đóng khi cuộn hoặc chạm ra ngoài. Muốn hiện lại thanh vĩnh viễn: bấm nút tròn, mở Cài đặt, bỏ chọn "Ẩn thanh chân trang". Nút tròn cũng lặn đi khi cuộn và từ từ hiện lại.
+- **Thân thiện cảm ứng:** lề hai bên hẹp hơn (ảnh to hơn), nút bấm có vùng chạm tối thiểu 44px (nút tim, thanh dưới, nút trong trình xem ảnh, nút đóng hộp thoại), bỏ độ trễ chạm.
+- **Menu Cài đặt** có hai ô: "Tự ẩn thanh trên/dưới khi cuộn" và "Ẩn thanh chân trang". Lựa chọn của người xem được nhớ trong trình duyệt và **chỉ ghi các mục họ đã đổi**, nên giá trị trong `config.toml` vẫn có hiệu lực với mục chưa đổi (đổi config rồi build lại là có tác dụng).
+
+Khi `mobile_friendly = false`, hai tùy chọn còn lại bị bỏ qua hoàn toàn (kể cả khi bạn đã đặt `hide_footer_bar = true`): không thêm class, ô tùy chọn hay nút nào vào trang.
+
+---
+
+## 13. Hiệu năng và mẹo cho bộ sưu tập lớn
 
 - Trang chỉ dựng vài bài đầu và tải thêm khi cuộn; ảnh dùng lazy-load. Ảnh đã có kích thước từ lúc build nên không bị nhảy layout.
 - Kiểm thử với 20.000 bài (32.000 media): build khoảng 1,4 giây (bản cũ ~8,6 giây); `index.html` ~3,6 MB (bản cũ ~6,5 MB); trang mở nhanh hơn ~40%.
@@ -432,7 +456,7 @@ Khi quét, script **bỏ qua** (không đưa vào archive) các media sau, áp d
 
 ---
 
-## 13. Xử lý sự cố
+## 14. Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -457,11 +481,16 @@ Khi quét, script **bỏ qua** (không đưa vào archive) các media sau, áp d
 | Ảnh hợp lệ bị báo "hỏng" | Thử `corrupt_check = "off"` để xác nhận, và gửi file mẫu nếu có; định dạng lạ (AVIF/HEIC/JXL) không bị coi là hỏng. |
 | Bài đã thích mất sau khi bật bộ lọc | Tập bài đổi nên mã nhận diện đổi: khôi phục từ file sao lưu (`I`) hoặc tắt bộ lọc. |
 | Memo bị gắn tag số (vd. #786) | Dùng bản 3.5 trở lên: nội dung mặc định không còn dấu `#` trước số. |
+| Muốn có thanh tự ẩn / ẩn chân trang nhưng không thấy | Cần `mobile_friendly = true` trong `config.toml` (mặc định tắt), build lại, và màn hình dưới 800px (tự ẩn chỉ áp dụng cho màn hình nhỏ). |
+| Ẩn chân trang rồi không biết mở Cài đặt ở đâu | Bấm nút tròn ở góc dưới bên phải để gọi thanh công cụ ra tạm thời, vào Cài đặt và bỏ chọn "Ẩn thanh chân trang". |
 | Muốn build lại từ đầu | `python build_archive.py --clear-cache`. |
 
 ---
 
-## 14. Có gì mới
+## 15. Có gì mới
+
+### 3.6
+- **Giao diện thân thiện điện thoại (tùy chọn, mặc định tắt):** thanh trên/dưới tự ẩn khi cuộn và từ từ hiện lại khi dừng; tùy chọn ẩn hẳn thanh chân trang kèm nút tròn gọi lại; lề hẹp, vùng chạm ≥44px. Cấu hình `mobile_friendly`, `mobile_autohide_bars`, `hide_footer_bar`. Khi tắt, giao diện giống hệt bản trước.
 
 ### 3.5
 - **Lọc media lỗi & chất lượng thấp:** `min_file_size_kb` (10), `min_width` (300), `min_height` (300), `corrupt_check` ("fast"); loại file 0 KB, ảnh/video quá nhỏ, ảnh nhỏ hơn mức cấu hình và file hỏng (Pillow bọc `try/except`); `--list-skipped`, `--no-quality-filter`; kết quả có cache.
